@@ -1,7 +1,8 @@
 /**
- * Data layer for the dashboard. When NEXT_PUBLIC_API_URL is set it fetches
- * the real OpenCorp API; otherwise it serves demo data mirroring the two
- * companies created during M1 validation, so the Vercel preview stands alone.
+ * Data layer for the dashboard. When NEXT_PUBLIC_API_URL is set it fetches the
+ * real OpenCorp API (public companies + P&L + ledger); otherwise it serves demo
+ * data so the Vercel preview stands alone. P&L mirrors §9.4: revenue in, credits
+ * spent, money withdrawn, current balance — every number on the public ledger.
  */
 
 export interface Company {
@@ -12,9 +13,10 @@ export interface Company {
   status: "active" | "paused";
   creditsSpent: number;
   revenueCents: number;
+  moneyOutCents: number;
+  balanceCents: number;
   tasksDone: number;
   tasksQueued: number;
-  url: string;
 }
 
 export interface LedgerEvent {
@@ -33,6 +35,9 @@ export interface CompanyTask {
   priority: number;
 }
 
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+export const isDemo = !API_URL;
+
 export const demoCompanies: Company[] = [
   {
     id: "e4e62166-f974-44fe-842e-8f38e2610832",
@@ -42,9 +47,10 @@ export const demoCompanies: Company[] = [
     status: "active",
     creditsSpent: 2.4,
     revenueCents: 5800,
+    moneyOutCents: 2900,
+    balanceCents: 2900,
     tasksDone: 4,
     tasksQueued: 3,
-    url: "http://sell-handmade-ceramic.localhost",
   },
   {
     id: "b220b359-37fa-4877-b217-7b20c83289b2",
@@ -54,9 +60,10 @@ export const demoCompanies: Company[] = [
     status: "active",
     creditsSpent: 1.1,
     revenueCents: 2900,
+    moneyOutCents: 0,
+    balanceCents: 2900,
     tasksDone: 2,
     tasksQueued: 3,
-    url: "http://a-newsletter-about.localhost",
   },
 ];
 
@@ -79,29 +86,56 @@ const now = Date.now();
 const ago = (min: number) => new Date(now - min * 60_000).toISOString();
 
 export const demoLedger: LedgerEvent[] = [
-  { seq: 14, companySlug: "sell-handmade-ceramic", actor: "worker:t-7", eventType: "tool_call", summary: "search_prospects(\"independent coffee shops, Paris\")", hash: "9f2c41ab8e01", createdAt: ago(2) },
-  { seq: 13, companySlug: "sell-handmade-ceramic", actor: "worker:t-7", eventType: "llm_call", summary: "standard tier · 1,842 tokens · €0.0031", hash: "77ab90c1d2f3", createdAt: ago(3) },
-  { seq: 12, companySlug: "a-newsletter-about", actor: "worker:t-4", eventType: "deploy", summary: "deploy_site → a-newsletter-about.localhost (v2)", hash: "c01dd24e9a55", createdAt: ago(11) },
-  { seq: 11, companySlug: "sell-handmade-ceramic", actor: "system", eventType: "money_in", summary: "Payment received: €29.00 (Handmade mug, classic)", hash: "31e8f00b6c77", createdAt: ago(26) },
-  { seq: 10, companySlug: "sell-handmade-ceramic", actor: "ceo", eventType: "task_state", summary: "Task \"Improve the landing page\" → done", hash: "ab44c19e0d12", createdAt: ago(41) },
-  { seq: 9, companySlug: "a-newsletter-about", actor: "ceo", eventType: "credit_change", summary: "task_charge −1.0 credit (estimated)", hash: "5d6e7f8a9b0c", createdAt: ago(58) },
-  { seq: 8, companySlug: "sell-handmade-ceramic", actor: "worker:t-5", eventType: "email_sent", summary: "send_email → email:a1b2c3d4e5f6 (outreach #3)", hash: "e2d3c4b5a697", createdAt: ago(75) },
-  { seq: 7, companySlug: "a-newsletter-about", actor: "system", eventType: "credit_change", summary: "task_refund +1.0 credit (task failed, auto-refund)", hash: "0192a3b4c5d6", createdAt: ago(90) },
+  { seq: 16, companySlug: "sell-handmade-ceramic", actor: "user", eventType: "money_out", summary: "Withdrawal paid: €29.00 → connected account", hash: "a7c93f1102bd", createdAt: ago(1) },
+  { seq: 15, companySlug: "sell-handmade-ceramic", actor: "worker:t-7", eventType: "tool_call", summary: "search_prospects(\"independent coffee shops, Paris\")", hash: "9f2c41ab8e01", createdAt: ago(2) },
+  { seq: 14, companySlug: "sell-handmade-ceramic", actor: "worker:t-7", eventType: "llm_call", summary: "standard tier · 1,842 tokens · €0.0031", hash: "77ab90c1d2f3", createdAt: ago(3) },
+  { seq: 13, companySlug: "a-newsletter-about", actor: "worker:t-4", eventType: "deploy", summary: "deploy_site → a-newsletter-about.opencorp.app (v2)", hash: "c01dd24e9a55", createdAt: ago(11) },
+  { seq: 12, companySlug: "sell-handmade-ceramic", actor: "system", eventType: "money_in", summary: "Payment received: €29.00 (Handmade mug, classic)", hash: "31e8f00b6c77", createdAt: ago(26) },
+  { seq: 11, companySlug: "sell-handmade-ceramic", actor: "ceo", eventType: "task_state", summary: "Task \"Improve the landing page\" → done", hash: "ab44c19e0d12", createdAt: ago(41) },
+  { seq: 10, companySlug: "a-newsletter-about", actor: "ceo", eventType: "credit_change", summary: "task_charge −1.0 credit (estimated)", hash: "5d6e7f8a9b0c", createdAt: ago(58) },
+  { seq: 9, companySlug: "sell-handmade-ceramic", actor: "worker:t-5", eventType: "email_sent", summary: "send_email → email:a1b2c3d4e5f6 (outreach #3)", hash: "e2d3c4b5a697", createdAt: ago(75) },
+  { seq: 8, companySlug: "a-newsletter-about", actor: "system", eventType: "credit_change", summary: "task_refund +1.0 credit (task failed, auto-refund)", hash: "0192a3b4c5d6", createdAt: ago(90) },
   { seq: 2, companySlug: "sell-handmade-ceramic", actor: "system", eventType: "company_created", summary: "Company created from one prompt → live in 0.3 s", hash: "f00dbeef1234", createdAt: ago(240) },
   { seq: 1, companySlug: "a-newsletter-about", actor: "system", eventType: "company_created", summary: "Company created from one prompt → live in 0.3 s", hash: "deadbeef0001", createdAt: ago(300) },
 ];
 
-export const isDemo = !process.env.NEXT_PUBLIC_API_URL;
+interface ApiCompany {
+  id: string; slug: string; name: string; mission: string; status: Company["status"];
+  revenueCents: number; creditsSpent: number; moneyOutCents: number; balanceCents: number;
+  tasksDone: number; tasksQueued: number;
+}
 
 export async function getCompanies(): Promise<Company[]> {
-  return demoCompanies; // swapped for API fetch once the control plane is hosted
+  if (!API_URL) return demoCompanies;
+  try {
+    const res = await fetch(`${API_URL}/api/companies`, { next: { revalidate: 5 } });
+    const { companies } = (await res.json()) as { companies: ApiCompany[] };
+    return companies;
+  } catch {
+    return demoCompanies;
+  }
+}
+
+export async function getCompany(
+  slug: string,
+): Promise<{ company: Company; tasks: CompanyTask[] } | null> {
+  if (!API_URL) {
+    const company = demoCompanies.find((c) => c.slug === slug);
+    return company ? { company, tasks: demoTasks[slug] ?? [] } : null;
+  }
+  try {
+    const res = await fetch(`${API_URL}/api/companies/${slug}`, { next: { revalidate: 5 } });
+    if (!res.ok) return null;
+    return (await res.json()) as { company: Company; tasks: CompanyTask[] };
+  } catch {
+    return null;
+  }
 }
 
 export async function getLedger(): Promise<LedgerEvent[]> {
-  const api = process.env.NEXT_PUBLIC_API_URL;
-  if (!api) return demoLedger;
+  if (!API_URL) return demoLedger;
   try {
-    const res = await fetch(`${api}/api/ledger?limit=50`, { next: { revalidate: 5 } });
+    const res = await fetch(`${API_URL}/api/ledger?limit=50`, { next: { revalidate: 5 } });
     const { events } = (await res.json()) as { events: { seq: number; companyId: string | null; actor: string; eventType: string; payload: unknown; hash: string; createdAt: string }[] };
     return events
       .map((e) => ({

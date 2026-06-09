@@ -100,7 +100,7 @@ a.card:hover { border-color: var(--accent); }
 .backlink { color: var(--muted); font-size: 0.85rem; display: inline-block; margin-bottom: 1.5rem; }
 .backlink:hover { color: var(--text); }
 
-.pnl { display: flex; gap: 2.5rem; margin: 1.5rem 0 0.5rem; }
+.pnl { display: flex; flex-wrap: wrap; gap: 2.5rem 2rem; margin: 1.5rem 0 0.5rem; }
 .pnl div span { display: block; color: var(--muted); font-size: 0.75rem; }
 .pnl div b { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
 .pnl .pos { color: var(--green); }

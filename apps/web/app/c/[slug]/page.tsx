@@ -1,16 +1,18 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { demoCompanies, demoTasks, getLedger } from "@/lib/data";
+import { getCompany, getLedger } from "@/lib/data";
 import { LedgerFeed } from "../../ledger-feed";
+
+const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 
 export default async function CompanyPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const company = demoCompanies.find((c) => c.slug === slug);
-  if (!company) notFound();
+  const data = await getCompany(slug);
+  if (!data) notFound();
+  const { company, tasks } = data;
 
-  const tasks = demoTasks[slug] ?? [];
   const events = (await getLedger()).filter((e) => e.companySlug === slug);
-  const pnl = company.revenueCents / 100 - company.creditsSpent;
+  const pnl = (company.revenueCents - company.creditsSpent * 100) / 100; // credits priced ~€1/credit
 
   return (
     <main>
@@ -25,7 +27,15 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
       <div className="pnl">
         <div>
           <span>Revenue</span>
-          <b className="pos">{(company.revenueCents / 100).toFixed(2)} €</b>
+          <b className="pos">{eur(company.revenueCents)}</b>
+        </div>
+        <div>
+          <span>Withdrawn</span>
+          <b>{eur(company.moneyOutCents)}</b>
+        </div>
+        <div>
+          <span>Balance</span>
+          <b>{eur(company.balanceCents)}</b>
         </div>
         <div>
           <span>Credits spent</span>
@@ -35,18 +45,17 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
           <span>P&L (approx.)</span>
           <b className={pnl >= 0 ? "pos" : ""}>{pnl.toFixed(2)} €</b>
         </div>
-        <div>
-          <span>Website</span>
-          <b>
-            <a href={company.url} style={{ textDecoration: "underline" }}>
-              {company.slug}.opencorp.app
-            </a>
-          </b>
-        </div>
       </div>
+      <p className="sub" style={{ margin: "0.75rem 0 0" }}>
+        Website:{" "}
+        <a href={`http://${slug}.opencorp.app`} style={{ textDecoration: "underline" }}>
+          {slug}.opencorp.app
+        </a>
+      </p>
 
       <div className="tasks">
         <h2 style={{ fontSize: "1.05rem" }}>Tasks</h2>
+        {tasks.length === 0 && <p className="sub">No tasks yet.</p>}
         {tasks.map((t) => (
           <div className="task" key={t.title}>
             <span className={`pill ${t.status}`}>{t.status}</span>
@@ -56,7 +65,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
       </div>
 
       <section style={{ marginTop: "2rem" }}>
-        <LedgerFeed initialEvents={events} />
+        <LedgerFeed initialEvents={events} companySlug={slug} />
       </section>
     </main>
   );

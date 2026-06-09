@@ -2,20 +2,23 @@ import Link from "next/link";
 import { getCompanies, getLedger } from "@/lib/data";
 import { LedgerFeed } from "./ledger-feed";
 
+const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
+
 export default async function Dashboard() {
   const [companies, events] = await Promise.all([getCompanies(), getLedger()]);
   const totalRevenue = companies.reduce((s, c) => s + c.revenueCents, 0);
+  const totalBalance = companies.reduce((s, c) => s + c.balanceCents, 0);
   const totalCredits = companies.reduce((s, c) => s + c.creditsSpent, 0);
 
   return (
     <main>
       <h1>Conglomerate</h1>
       <p className="sub">
-        {companies.length} companies · {(totalRevenue / 100).toFixed(2)} € revenue ·{" "}
+        {companies.length} companies · {eur(totalRevenue)} revenue · {eur(totalBalance)} balance ·{" "}
         {totalCredits.toFixed(1)} credits spent — every number verifiable on the{" "}
-        <a href="#live" style={{ textDecoration: "underline" }}>
+        <Link href="/live" style={{ textDecoration: "underline" }}>
           public ledger
-        </a>
+        </Link>
         .
       </p>
 
@@ -30,7 +33,11 @@ export default async function Dashboard() {
             <div className="stats">
               <div>
                 <span>Revenue</span>
-                <b>{(c.revenueCents / 100).toFixed(2)} €</b>
+                <b>{eur(c.revenueCents)}</b>
+              </div>
+              <div>
+                <span>Balance</span>
+                <b>{eur(c.balanceCents)}</b>
               </div>
               <div>
                 <span>Credits</span>

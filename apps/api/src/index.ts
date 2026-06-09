@@ -9,10 +9,56 @@ const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp";
 const store = new PgStore(databaseUrl);
 const ledger = new Ledger(store);
+const sql = postgres(databaseUrl, { max: 5 });
 
 const app = new Hono();
 
 app.get("/healthz", (c) => c.json({ ok: true, service: "opencorp-api" }));
+
+// §9.2/§9.4 — public company list with a real P&L: revenue in, credits spent,
+// money withdrawn, current balance. Public companies only (is_public, §4).
+const PNL_COLUMNS = sql`
+  c.id, c.slug, c.name, c.mission, c.status, c.real_balance_cents,
+  COALESCE((SELECT SUM(amount_cents) FROM payments p WHERE p.company_id = c.id), 0) AS revenue_cents,
+  COALESCE((SELECT -SUM(delta) FROM credit_entries ce
+            WHERE ce.company_id = c.id AND ce.reason IN ('task_charge','task_refund')), 0) AS credits_spent,
+  COALESCE((SELECT SUM((payload->>'amountCents')::bigint) FROM ledger_events le
+            WHERE le.company_id = c.id AND le.event_type = 'money_out'), 0) AS money_out_cents,
+  COALESCE((SELECT count(*) FROM tasks t WHERE t.company_id = c.id AND t.status = 'done'), 0) AS tasks_done,
+  COALESCE((SELECT count(*) FROM tasks t WHERE t.company_id = c.id AND t.status = 'queued'), 0) AS tasks_queued`;
+
+interface PnlRow {
+  id: string; slug: string; name: string; mission: string; status: string;
+  real_balance_cents: string; revenue_cents: string; credits_spent: string;
+  money_out_cents: string; tasks_done: string; tasks_queued: string;
+}
+const toPnl = (r: PnlRow) => ({
+  id: r.id, slug: r.slug, name: r.name, mission: r.mission, status: r.status,
+  revenueCents: Number(r.revenue_cents),
+  creditsSpent: Number(r.credits_spent),
+  moneyOutCents: Number(r.money_out_cents),
+  balanceCents: Number(r.real_balance_cents),
+  tasksDone: Number(r.tasks_done),
+  tasksQueued: Number(r.tasks_queued),
+});
+
+app.get("/api/companies", async (c) => {
+  const rows = await sql<PnlRow[]>`
+    SELECT ${PNL_COLUMNS} FROM companies c WHERE c.is_public = true
+    ORDER BY c.created_at DESC LIMIT 100`;
+  return c.json({ companies: rows.map(toPnl) });
+});
+
+app.get("/api/companies/:slug", async (c) => {
+  const [row] = await sql<PnlRow[]>`
+    SELECT ${PNL_COLUMNS} FROM companies c WHERE c.slug = ${c.req.param("slug")} AND c.is_public = true`;
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const tasks = await sql`
+    SELECT title, status, priority FROM tasks
+    WHERE company_id = ${row.id} AND status <> 'deleted'
+    ORDER BY priority DESC, created_at DESC LIMIT 25`;
+  return c.json({ company: toPnl(row), tasks });
+});
 
 // §6 — one prompt → company. Auth lands in a later milestone; conglomerateId
 // is taken from the body for now.
