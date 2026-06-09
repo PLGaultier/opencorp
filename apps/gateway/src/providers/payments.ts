@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { SecretStore } from "../secrets";
 
 /**
@@ -17,12 +18,21 @@ export interface NewProduct {
   currency: string;
 }
 
+export interface PayoutRequest {
+  amountCents: number;
+  currency: string;
+  /** Stripe Connect account id (acct_...) for the destination; null in local mode. */
+  destination: string | null;
+}
+
 export interface PaymentsProvider {
   readonly kind: "stripe" | "local";
   /** Create the external product + a reusable payment link. */
   createProduct(p: NewProduct): Promise<{ providerRef: string; paymentLink: string }>;
   /** Deactivate the external product (gated tool — see §7.3). */
   deleteProduct(providerRef: string): Promise<void>;
+  /** Move funds out to a connected account (§10 withdrawals; money-out). */
+  payout(req: PayoutRequest): Promise<{ transferId: string }>;
 }
 
 // ── Local (dev / self-host without Stripe) ─────────────────────────────────
@@ -38,6 +48,11 @@ class LocalPayments implements PaymentsProvider {
 
   async deleteProduct(): Promise<void> {
     /* nothing external to deactivate */
+  }
+
+  async payout(): Promise<{ transferId: string }> {
+    // No real banking rail in dev; the ledger + withdrawals row are the record.
+    return { transferId: `local-payout:${randomUUID()}` };
   }
 }
 
@@ -63,6 +78,16 @@ class StripePayments implements PaymentsProvider {
   async deleteProduct(providerRef: string) {
     const productId = providerRef.split(":")[1];
     if (productId) await this.call(`products/${productId}`, { active: "false" });
+  }
+
+  async payout(req: PayoutRequest) {
+    if (!req.destination) throw new Error("stripe payout needs a connected account (STRIPE_CONNECT_ACCOUNT)");
+    const transfer = await this.call("transfers", {
+      amount: String(req.amountCents),
+      currency: req.currency,
+      destination: req.destination,
+    });
+    return { transferId: `stripe:${transfer.id}` };
   }
 
   private async call(path: string, form: Record<string, string>): Promise<{ id: string; [k: string]: unknown }> {

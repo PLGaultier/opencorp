@@ -1,4 +1,5 @@
 export { TaskRun, CompanyHeartbeat } from "./taskWorkflows";
+export { Withdrawal } from "./withdrawalWorkflow";
 
 import { proxyActivities } from "@temporalio/workflow";
 import type * as activities from "./activities";

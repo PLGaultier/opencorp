@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { assertPublicUrl, extractText } from "../src/providers/browser";
 import { isValidAddress, listUnsubscribeHeader } from "../src/providers/email";
+import { paymentsFor } from "../src/providers/payments";
+import { EnvSecretStore } from "../src/secrets";
 import { registry } from "../src/tools";
 import { DEFAULT_LIMITS } from "../src/ratelimit";
 
@@ -49,6 +51,26 @@ describe("email hygiene (§7.3)", () => {
     expect(listUnsubscribeHeader("acme@opencorp.app")["List-Unsubscribe"]).toContain(
       "acme@opencorp.app",
     );
+  });
+});
+
+describe("payments provider (§10)", () => {
+  const secrets = new EnvSecretStore();
+
+  test("local mode without a Stripe key, payout returns a transfer id", async () => {
+    const p = await paymentsFor("co-1", secrets, "http://cb");
+    expect(p.kind).toBe("local");
+    const { providerRef, paymentLink } = await p.createProduct({
+      productId: "p1",
+      slug: "acme",
+      name: "Starter",
+      priceCents: 1900,
+      currency: "eur",
+    });
+    expect(providerRef).toBe("local:p1");
+    expect(paymentLink).toBe("http://cb/pay/acme/p1");
+    const { transferId } = await p.payout({ amountCents: 1000, currency: "eur", destination: null });
+    expect(transferId).toStartWith("local-payout:");
   });
 });
 

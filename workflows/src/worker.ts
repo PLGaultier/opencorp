@@ -2,8 +2,9 @@ import { Worker, NativeConnection } from "@temporalio/worker";
 import { fileURLToPath } from "node:url";
 import * as createActivities from "./activities";
 import * as taskActivities from "./taskActivities";
+import * as withdrawalActivities from "./withdrawalActivities";
 
-const activities = { ...createActivities, ...taskActivities };
+const activities = { ...createActivities, ...taskActivities, ...withdrawalActivities };
 
 /**
  * Temporal worker for the control-plane task queue. Run with Node (tsx) —

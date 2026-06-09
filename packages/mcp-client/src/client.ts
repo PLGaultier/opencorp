@@ -17,11 +17,24 @@ export async function callTool(
   tool: string,
   args: unknown,
 ): Promise<ToolResult> {
-  const res = await fetch(`${gatewayUrl}/tools/${server}/${tool}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify(args ?? {}),
-  });
+  // Retry only transient *transport* failures (connection resets), never HTTP
+  // responses — a rate-limited/erroring call reached the gateway and must count
+  // (§7.2). A reset never hit the server, so retrying it is safe and idempotent
+  // at the transport layer.
+  let res: Response | undefined;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      res = await fetch(`${gatewayUrl}/tools/${server}/${tool}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify(args ?? {}),
+      });
+      break;
+    } catch (err) {
+      if (attempt >= 3) return { ok: false, error: "gateway_unreachable", message: String(err) };
+      await new Promise((r) => setTimeout(r, 25 * (attempt + 1)));
+    }
+  }
   const body = (await res.json().catch(() => ({ error: "bad_gateway_response" }))) as Record<
     string,
     unknown

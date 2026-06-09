@@ -3,7 +3,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import postgres from "postgres";
 import { Ledger, PgStore } from "@opencorp/ledgerd";
-import { startCreateCompany, startHeartbeat, startTaskRun } from "@opencorp/workflows";
+import { startCreateCompany, startHeartbeat, startTaskRun, startWithdrawal } from "@opencorp/workflows";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp";
@@ -34,6 +34,19 @@ app.post("/tasks/:id/run", async (c) => {
     return c.json(await startTaskRun(c.req.param("id")));
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
+  }
+});
+
+// §10 — money-out. User-initiated (the §7.3 human approval); durable workflow.
+app.post("/companies/:id/withdraw", async (c) => {
+  const body = z
+    .object({ amountCents: z.number().int().positive(), currency: z.string().length(3).optional() })
+    .safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  try {
+    return c.json(await startWithdrawal({ companyId: c.req.param("id"), ...body.data }));
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 422);
   }
 });
 

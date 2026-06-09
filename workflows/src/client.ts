@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { Client, Connection } from "@temporalio/client";
 import type { CreateCompanyInput, CreateCompanyResult } from "./workflows";
+import type { WithdrawalResult } from "./withdrawalActivities";
 
 const TASK_QUEUE = "opencorp-control";
 
@@ -49,6 +51,25 @@ export async function startTaskRun(taskId: string): Promise<unknown> {
     args: [{ taskId }],
   });
   return handle.result();
+}
+
+/** Money-out (§10). withdrawalId is minted here so the API can return it and
+ *  the workflow stays deterministic; workflowId dedupes accidental double-clicks. */
+export async function startWithdrawal(input: {
+  companyId: string;
+  amountCents: number;
+  currency?: string;
+}): Promise<{ withdrawalId: string } & WithdrawalResult> {
+  const c = await temporalClient();
+  const withdrawalId = randomUUID();
+  const args = { withdrawalId, companyId: input.companyId, amountCents: input.amountCents, currency: input.currency ?? "eur" };
+  const handle = await c.workflow.start("Withdrawal", {
+    taskQueue: TASK_QUEUE,
+    workflowId: `withdrawal:${withdrawalId}`,
+    args: [args],
+  });
+  const result = (await handle.result()) as WithdrawalResult;
+  return { withdrawalId, ...result };
 }
 
 function simpleHash(s: string): number {

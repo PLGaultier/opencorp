@@ -9,6 +9,7 @@ import { MemoryRateLimiter } from "./ratelimit";
 import { secretStoreFromEnv } from "./secrets";
 import { FetchBrowser } from "./providers/browser";
 import { recordPayment } from "./revenue";
+import { processWithdrawal } from "./payout";
 
 /**
  * MCP tool gateway (§7): every capability call from agents terminates here.
@@ -20,13 +21,17 @@ export function createGateway(opts?: {
   databaseUrl?: string;
   deploydUrl?: string;
   checkoutBase?: string;
+  poolMax?: number;
 }) {
   const databaseUrl =
     opts?.databaseUrl ??
     process.env.DATABASE_URL ??
     "postgres://opencorp:opencorp@localhost:5432/opencorp";
-  const sql = postgres(databaseUrl, { max: 10 });
-  const ledger = new Ledger(new PgStore(databaseUrl));
+  // Prod fronts Postgres with PgBouncer (§11.6); the pool size is tunable so a
+  // single dev gateway can absorb a concurrency burst without starving sockets.
+  const poolMax = opts?.poolMax ?? Number(process.env.GATEWAY_PG_POOL ?? 10);
+  const sql = postgres(databaseUrl, { max: poolMax });
+  const ledger = new Ledger(new PgStore(databaseUrl, poolMax));
   const limiter = new MemoryRateLimiter();
   const secrets = secretStoreFromEnv();
   const browser = new FetchBrowser();
@@ -146,22 +151,47 @@ export function createGateway(opts?: {
     feeCents: z.number().int().min(0).optional(),
   });
 
-  app.post("/webhooks/payment", async (c) => {
-    const raw = await c.req.text();
-    const sig = c.req.header("x-opencorp-sig") ?? "";
+  // Both money endpoints are signed by the platform (not agents) with an HMAC
+  // of the raw body under GATEWAY_SECRET, so they cannot be spammed.
+  const signedBody = (raw: string, sig: string): boolean => {
     const expected = createHmac("sha256", process.env.GATEWAY_SECRET ?? "dev-gateway-secret")
       .update(raw)
       .digest("hex");
-    const ok =
-      sig.length === expected.length &&
-      timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
-    if (!ok) return c.json({ error: "bad_signature" }, 401);
+    return sig.length === expected.length && timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  };
 
+  app.post("/webhooks/payment", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
     const parsed = PaymentBody.safeParse(JSON.parse(raw || "{}"));
     if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+    return c.json(await recordPayment(sql, ledger, parsed.data));
+  });
 
-    const result = await recordPayment(sql, ledger, parsed.data);
-    return c.json(result);
+  // Money-out (§10). User-initiated from the dashboard; the durable Withdrawal
+  // workflow calls this so retries are safe (idempotent on withdrawalId).
+  const WithdrawBody = z.object({
+    withdrawalId: z.string().uuid(),
+    companyId: z.string().uuid(),
+    amountCents: z.number().int().positive(),
+    currency: z.string().min(3).max(3).default("eur"),
+  });
+
+  app.post("/admin/withdraw", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
+    const parsed = WithdrawBody.safeParse(JSON.parse(raw || "{}"));
+    if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+
+    const [co] = await sql<{ conglomerate_id: string }[]>`
+      SELECT conglomerate_id FROM companies WHERE id = ${parsed.data.companyId}`;
+    if (!co) return c.json({ error: "company_not_found" }, 404);
+
+    const result = await processWithdrawal(sql, ledger, secrets, {
+      ...parsed.data,
+      conglomerateId: co.conglomerate_id,
+    });
+    return c.json(result, result.status === "failed" ? 422 : 200);
   });
 
   return { app, sql, ledger };

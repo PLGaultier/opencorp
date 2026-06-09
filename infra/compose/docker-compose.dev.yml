@@ -3,6 +3,9 @@ name: opencorp-dev
 services:
   postgres:
     image: pgvector/pgvector:pg17
+    # Prod uses a dedicated PG node + PgBouncer (§11.6, §12); dev shares one
+    # Postgres with Temporal, so raise headroom for the M4 concurrency test.
+    command: ["postgres", "-c", "max_connections=300"]
     environment:
       POSTGRES_USER: opencorp
       POSTGRES_PASSWORD: opencorp

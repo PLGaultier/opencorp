@@ -47,8 +47,8 @@ export class MemoryStore implements LedgerStore {
 export class PgStore implements LedgerStore {
   private sql: postgres.Sql;
 
-  constructor(databaseUrl: string) {
-    this.sql = postgres(databaseUrl, { max: 5 });
+  constructor(databaseUrl: string, maxConnections = 5) {
+    this.sql = postgres(databaseUrl, { max: maxConnections });
   }
 
   /**
