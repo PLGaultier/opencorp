@@ -1,0 +1,17 @@
+{
+  "name": "@opencorp/api",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "@opencorp/ledgerd": "workspace:*",
+    "@opencorp/workflows": "workspace:*",
+    "@opencorp/schema": "workspace:*",
+    "postgres": "^3.4.5",
+    "zod": "^3.24.0"
+  }
+}

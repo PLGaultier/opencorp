@@ -1,0 +1,108 @@
+name: opencorp-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: opencorp
+      POSTGRES_PASSWORD: opencorp
+      POSTGRES_DB: opencorp
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opencorp"]
+      interval: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8
+    ports: ["6379:6379"]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: opencorp
+      MINIO_ROOT_PASSWORD: opencorp-dev
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - miniodata:/data
+
+  temporal:
+    image: temporalio/auto-setup:1.26
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: opencorp
+      POSTGRES_PWD: opencorp
+      POSTGRES_SEEDS: postgres
+    ports: ["7233:7233"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports: ["8233:8080"]
+    depends_on: [temporal]
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+    environment:
+      # bring your own key; any OpenAI-compatible provider works
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./litellm.config.yaml:/etc/litellm/config.yaml:ro
+    ports: ["4000:4000"]
+
+  deployd:
+    image: oven/bun:1
+    working_dir: /repo
+    command: ["bun", "services/deployd/src/server.ts"]
+    environment:
+      SITES_DIR: /srv/sites
+      PORT: "3002"
+    ports: ["3002:3002"]
+    volumes:
+      - ../..:/repo:ro
+      - sites:/srv/sites
+
+  caddy:
+    image: caddy:2.9
+    ports: ["80:80"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - sites:/srv/sites:ro
+
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:9
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      FORGEJO__server__ROOT_URL: http://localhost:3030/
+      FORGEJO__server__HTTP_PORT: "3030"
+    ports: ["3030:3030", "2222:22"]
+    volumes:
+      - forgejodata:/data
+
+  umami:
+    image: ghcr.io/umami-software/umami:postgresql-latest
+    environment:
+      DATABASE_URL: postgres://opencorp:opencorp@postgres:5432/umami
+      APP_SECRET: dev-only-umami-secret
+    ports: ["3003:3000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  miniodata:
+  sites:
+  forgejodata:

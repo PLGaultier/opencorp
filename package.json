@@ -1,0 +1,23 @@
+{
+  "name": "opencorp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source autonomous company platform with radical transparency",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*",
+    "workflows"
+  ],
+  "scripts": {
+    "dev:api": "bun run --cwd apps/api dev",
+    "test": "bun test",
+    "ledger:verify": "bun run services/ledgerd/src/cli.ts verify",
+    "db:generate": "bun run --cwd packages/schema generate",
+    "db:migrate": "bun run --cwd packages/schema migrate"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "^1.1.14"
+  }
+}

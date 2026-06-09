@@ -1,0 +1,12 @@
+# Dev edge: serves every per-company site from the shared volume.
+# {labels.1} of "acme.localhost" is "acme" → /srv/sites/acme
+# Prod swaps this for wildcard *.opencorp.app TLS + on-demand TLS (§12).
+http://*.localhost:80 {
+	root * /srv/sites/{labels.1}
+	file_server
+	encode gzip
+}
+
+http://localhost:80 {
+	respond "OpenCorp dev edge. Sites at http://{slug}.localhost" 200
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@opencorp/workflows",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "worker": "tsx src/worker.ts"
+  },
+  "dependencies": {
+    "@temporalio/activity": "^1.11.0",
+    "@temporalio/client": "^1.11.0",
+    "@temporalio/worker": "^1.11.0",
+    "@temporalio/workflow": "^1.11.0",
+    "@opencorp/llm": "workspace:*",
+    "@opencorp/ledgerd": "workspace:*",
+    "@opencorp/deployd": "workspace:*",
+    "@opencorp/agentd": "workspace:*",
+    "@opencorp/mcp-client": "workspace:*",
+    "postgres": "^3.4.5",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}
