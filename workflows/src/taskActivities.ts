@@ -2,6 +2,7 @@ import postgres from "postgres";
 import { signToken } from "@opencorp/mcp-client";
 import { runWorkerTask } from "@opencorp/agentd";
 import { Ledger, PgStore } from "@opencorp/ledgerd";
+import { LocalSandboxPool } from "@opencorp/sandboxd";
 
 /** TaskRun + CompanyHeartbeat activities (§5.2, §5.3). */
 
@@ -11,6 +12,11 @@ const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3004";
 
 const sql = postgres(DATABASE_URL, { max: 5 });
 const ledger = new Ledger(new PgStore(DATABASE_URL));
+
+// Execution-plane pool (§8). Local in-process today; swap for the Firecracker
+// pool on bare metal without touching the agent loop. One sandbox per task,
+// never reused (§5.3).
+const sandboxes = new LocalSandboxPool(Number(process.env.SANDBOX_CAPACITY ?? 64));
 
 export interface TaskRow {
   id: string;
@@ -99,7 +105,7 @@ export async function setTaskState(
   });
 }
 
-/** The agent loop runs in-process for M2; M4 moves it into a sandbox claim. */
+/** Claim a sandbox, run the agent loop inside it, release it (§8, §5.3). */
 export async function runWorker(taskId: string): Promise<{ summary: string; steps: number }> {
   const t = await taskRow(taskId);
   const token = signToken({
@@ -107,13 +113,21 @@ export async function runWorker(taskId: string): Promise<{ summary: string; step
     taskId,
     exp: Math.floor(Date.now() / 1000) + 35 * 60,
   });
-  return runWorkerTask({
-    gatewayUrl: GATEWAY_URL,
-    token,
-    task: { id: t.id, title: t.title, description: t.description },
-    company: { name: t.name, slug: t.slug, mission: t.mission },
-    budgets: { maxSteps: 80, maxWallClockMs: 30 * 60_000 },
-  });
+  const budgets = { maxSteps: 80, maxWallClockMs: 30 * 60_000 };
+  const sandbox = await sandboxes.claim({ taskId, companyId: t.company_id, budgets });
+  try {
+    return await sandbox.run(() =>
+      runWorkerTask({
+        gatewayUrl: GATEWAY_URL,
+        token,
+        task: { id: t.id, title: t.title, description: t.description },
+        company: { name: t.name, slug: t.slug, mission: t.mission },
+        budgets,
+      }),
+    );
+  } finally {
+    await sandbox.release();
+  }
 }
 
 // ── Heartbeat helpers ──────────────────────────────────────────────────────

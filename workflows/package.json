@@ -17,6 +17,7 @@
     "@opencorp/ledgerd": "workspace:*",
     "@opencorp/deployd": "workspace:*",
     "@opencorp/agentd": "workspace:*",
+    "@opencorp/sandboxd": "workspace:*",
     "@opencorp/mcp-client": "workspace:*",
     "postgres": "^3.4.5",
     "zod": "^3.24.0"

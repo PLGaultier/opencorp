@@ -101,6 +101,10 @@
         "zod": "^3.24.0",
       },
     },
+    "services/sandboxd": {
+      "name": "@opencorp/sandboxd",
+      "version": "0.1.0",
+    },
     "workflows": {
       "name": "@opencorp/workflows",
       "version": "0.1.0",
@@ -110,6 +114,7 @@
         "@opencorp/ledgerd": "workspace:*",
         "@opencorp/llm": "workspace:*",
         "@opencorp/mcp-client": "workspace:*",
+        "@opencorp/sandboxd": "workspace:*",
         "@temporalio/activity": "^1.11.0",
         "@temporalio/client": "^1.11.0",
         "@temporalio/worker": "^1.11.0",
@@ -308,6 +313,8 @@
     "@opencorp/llm": ["@opencorp/llm@workspace:packages/llm"],
 
     "@opencorp/mcp-client": ["@opencorp/mcp-client@workspace:packages/mcp-client"],
+
+    "@opencorp/sandboxd": ["@opencorp/sandboxd@workspace:services/sandboxd"],
 
     "@opencorp/schema": ["@opencorp/schema@workspace:packages/schema"],
 
