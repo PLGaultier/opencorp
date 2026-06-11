@@ -67,6 +67,7 @@ const requireCompanyAccess: typeof requireAuth = async (c, next) => {
 // money withdrawn, current balance. Public companies only (is_public, §4).
 const PNL_COLUMNS = sql`
   c.id, c.slug, c.name, c.mission, c.status, c.real_balance_cents,
+  c.daily_task_cap, c.autonomy_level, c.is_public,
   COALESCE((SELECT SUM(amount_cents) FROM payments p WHERE p.company_id = c.id), 0) AS revenue_cents,
   COALESCE((SELECT -SUM(delta) FROM credit_entries ce
             WHERE ce.company_id = c.id AND ce.reason IN ('task_charge','task_refund')), 0) AS credits_spent,
@@ -79,6 +80,7 @@ interface PnlRow {
   id: string; slug: string; name: string; mission: string; status: string;
   real_balance_cents: string; revenue_cents: string; credits_spent: string;
   money_out_cents: string; tasks_done: string; tasks_queued: string;
+  daily_task_cap: string; autonomy_level: string; is_public: boolean;
 }
 const toPnl = (r: PnlRow) => ({
   id: r.id, slug: r.slug, name: r.name, mission: r.mission, status: r.status,
@@ -88,6 +90,9 @@ const toPnl = (r: PnlRow) => ({
   balanceCents: Number(r.real_balance_cents),
   tasksDone: Number(r.tasks_done),
   tasksQueued: Number(r.tasks_queued),
+  dailyTaskCap: Number(r.daily_task_cap),
+  autonomyLevel: r.autonomy_level,
+  isPublic: r.is_public,
 });
 
 app.get("/api/companies", async (c) => {
@@ -141,6 +146,88 @@ app.get("/api/companies/:slug/events", async (c) => {
   });
 });
 
+// Full task fields for the task management UI (public companies only, like
+// the events endpoint). The PnL task list above stays slim for the dashboard.
+const TASK_COLUMNS = sql`
+  id, title, description, status, priority, result_summary, error,
+  credits_estimated, credits_charged, trace_id, created_at, started_at, finished_at`;
+
+interface TaskRow {
+  id: string; title: string; description: string; status: string; priority: number;
+  result_summary: string | null; error: string | null;
+  credits_estimated: string | null; credits_charged: string | null;
+  trace_id: string | null; created_at: string; started_at: string | null; finished_at: string | null;
+}
+const toTask = (t: TaskRow, traceCfg: ReturnType<typeof traceConfigFromEnv>) => ({
+  id: t.id,
+  title: t.title,
+  description: t.description,
+  status: t.status,
+  priority: t.priority,
+  resultSummary: t.result_summary,
+  error: t.error,
+  creditsEstimated: t.credits_estimated ? Number(t.credits_estimated) : null,
+  creditsCharged: t.credits_charged ? Number(t.credits_charged) : null,
+  traceUrl: t.trace_id && traceCfg ? publicTraceUrl(traceCfg, t.trace_id) : null,
+  createdAt: t.created_at,
+  startedAt: t.started_at,
+  finishedAt: t.finished_at,
+});
+
+const publicCompanyId = async (slug: string) => {
+  const [co] = await sql<{ id: string }[]>`
+    SELECT id FROM companies WHERE slug = ${slug} AND is_public = true`;
+  return co?.id ?? null;
+};
+
+app.get("/api/companies/:slug/tasks", async (c) => {
+  const companyId = await publicCompanyId(c.req.param("slug"));
+  if (!companyId) return c.json({ error: "not_found" }, 404);
+  const traceCfg = traceConfigFromEnv();
+  const rows = await sql<TaskRow[]>`
+    SELECT ${TASK_COLUMNS} FROM tasks
+    WHERE company_id = ${companyId} AND status <> 'deleted'
+    ORDER BY priority DESC, created_at DESC LIMIT 100`;
+  return c.json({ companyId, tasks: rows.map((t) => toTask(t, traceCfg)) });
+});
+
+app.get("/api/companies/:slug/tasks/:taskId", async (c) => {
+  const companyId = await publicCompanyId(c.req.param("slug"));
+  if (!companyId) return c.json({ error: "not_found" }, 404);
+  const [row] = await sql<TaskRow[]>`
+    SELECT ${TASK_COLUMNS} FROM tasks
+    WHERE id = ${c.req.param("taskId")} AND company_id = ${companyId} AND status <> 'deleted'`;
+  if (!row) return c.json({ error: "not_found" }, 404);
+  return c.json({ companyId, task: toTask(row, traceConfigFromEnv()) });
+});
+
+// §16/M5 — the org chart: CEO + department agents (CMO/CTO/CFO) + workers,
+// with their recent department plans straight from the ledger.
+app.get("/api/companies/:slug/agents", async (c) => {
+  const companyId = await publicCompanyId(c.req.param("slug"));
+  if (!companyId) return c.json({ error: "not_found" }, 404);
+  const agents = await sql<
+    { id: string; kind: string; name: string; role_prompt: string; model_tier: string; created_at: string }[]
+  >`SELECT id, kind, name, role_prompt, model_tier, created_at FROM agents
+    WHERE company_id = ${companyId}
+    ORDER BY CASE kind WHEN 'ceo' THEN 0 WHEN 'department' THEN 1 ELSE 2 END, created_at`;
+  const plans = await sql<
+    { seq: string; actor: string; payload: unknown; created_at: string }[]
+  >`SELECT seq, actor, payload, created_at FROM ledger_events
+    WHERE company_id = ${companyId} AND event_type = 'department_plan'
+    ORDER BY seq DESC LIMIT 20`;
+  return c.json({
+    companyId,
+    agents: agents.map((a) => ({
+      id: a.id, kind: a.kind, name: a.name, rolePrompt: a.role_prompt,
+      modelTier: a.model_tier, createdAt: a.created_at,
+    })),
+    departmentPlans: plans.map((p) => ({
+      seq: Number(p.seq), actor: p.actor, payload: p.payload, createdAt: p.created_at,
+    })),
+  });
+});
+
 // §6 — one prompt → company, in the session user's conglomerate. A user with
 // several conglomerates may pick one explicitly; it must be theirs.
 app.post("/companies", requireAuth, async (c) => {
@@ -155,6 +242,107 @@ app.post("/companies", requireAuth, async (c) => {
   }
   const result = await startCreateCompany({ conglomerateId, prompt: body.data.prompt });
   return c.json(result, 201);
+});
+
+// Owner settings (dashboard-only — the CEO can only patch the mission via
+// org.update_mission; caps, autonomy and visibility stay human-controlled).
+app.patch("/companies/:id", requireAuth, requireCompanyAccess, async (c) => {
+  const body = z
+    .object({
+      name: z.string().min(1).max(120).optional(),
+      mission: z.string().min(10).max(2000).optional(),
+      dailyTaskCap: z.number().int().min(1).max(50).optional(),
+      autonomyLevel: z.enum(["supervised", "bounded", "full"]).optional(),
+      isPublic: z.boolean().optional(),
+    })
+    .refine((b) => Object.values(b).some((v) => v !== undefined), { message: "empty patch" })
+    .safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  const companyId = c.req.param("id");
+  const p = body.data;
+  const [row] = await sql<
+    { id: string; name: string; mission: string; daily_task_cap: number; autonomy_level: string; is_public: boolean }[]
+  >`
+    UPDATE companies SET
+      name = COALESCE(${p.name ?? null}, name),
+      mission = COALESCE(${p.mission ?? null}, mission),
+      daily_task_cap = COALESCE(${p.dailyTaskCap ?? null}, daily_task_cap),
+      autonomy_level = COALESCE(${p.autonomyLevel ?? null}, autonomy_level),
+      is_public = COALESCE(${p.isPublic ?? null}, is_public)
+    WHERE id = ${companyId}
+    RETURNING id, name, mission, daily_task_cap, autonomy_level, is_public`;
+  if (!row) return c.json({ error: "not_found" }, 404);
+  await ledger.append({ companyId, actor: "user", eventType: "company_settings", payload: p });
+  return c.json({
+    id: row.id, name: row.name, mission: row.mission,
+    dailyTaskCap: row.daily_task_cap, autonomyLevel: row.autonomy_level, isPublic: row.is_public,
+  });
+});
+
+// Owner task creation — same shape and 'queued' status as the CEO's
+// org.create_task tool, but attributed to the user on the ledger.
+app.post("/companies/:id/tasks", requireAuth, requireCompanyAccess, async (c) => {
+  const body = z
+    .object({
+      title: z.string().min(1).max(200),
+      description: z.string().max(5000).default(""),
+      priority: z.number().int().default(0),
+    })
+    .safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  const companyId = c.req.param("id");
+  const [t] = await sql<{ id: string }[]>`
+    INSERT INTO tasks (company_id, title, description, status, priority)
+    VALUES (${companyId}, ${body.data.title}, ${body.data.description}, 'queued', ${body.data.priority})
+    RETURNING id`;
+  await ledger.append({
+    companyId,
+    actor: "user",
+    eventType: "task_state",
+    payload: { taskId: t!.id, title: body.data.title, status: "queued", source: "owner" },
+  });
+  return c.json({ taskId: t!.id }, 201);
+});
+
+// Owner task edits — mirrors org.update_task: running/done tasks are locked.
+app.patch("/tasks/:id", requireAuth, async (c) => {
+  const body = z
+    .object({
+      title: z.string().min(1).max(200).optional(),
+      status: z.enum(["pending", "queued", "deleted"]).optional(),
+      priority: z.number().int().optional(),
+      description: z.string().max(5000).optional(),
+    })
+    .refine((b) => Object.values(b).some((v) => v !== undefined), { message: "empty patch" })
+    .safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  const taskId = c.req.param("id");
+  const [task] = await sql<{ company_id: string; status: string }[]>`
+    SELECT company_id, status FROM tasks WHERE id = ${taskId}`;
+  if (!task) return c.json({ error: "not_found" }, 404);
+  if (!(await userCanAccessCompany(sql, c.get("userId"), task.company_id))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  const p = body.data;
+  const [row] = await sql<{ id: string; title: string; status: string; priority: number; description: string }[]>`
+    UPDATE tasks SET
+      title = COALESCE(${p.title ?? null}, title),
+      status = COALESCE(${p.status ?? null}, status),
+      priority = COALESCE(${p.priority ?? null}, priority),
+      description = COALESCE(${p.description ?? null}, description)
+    WHERE id = ${taskId} AND status NOT IN ('running', 'done')
+    RETURNING id, title, status, priority, description`;
+  if (!row) return c.json({ error: "task_locked", detail: `task is ${task.status}` }, 409);
+  await ledger.append({
+    companyId: task.company_id,
+    actor: "user",
+    eventType: "task_state",
+    payload: { taskId, ...p, source: "owner" },
+  });
+  return c.json({
+    id: row.id, title: row.title, status: row.status,
+    priority: row.priority, description: row.description,
+  });
 });
 
 // §5.2 — manual heartbeat / Run-now controls (dashboard actions, never LLM tools)
@@ -312,6 +500,56 @@ app.post("/companies/:id/chat", requireAuth, requireCompanyAccess, async (c) => 
     },
   });
   return c.json({ reply: reply.reply, createdTasks: applied.createdTasks });
+});
+
+// §1 feature 3 — the company's real email inbox (Stalwart JMAP). Public read
+// mirrors the tasks/agents transparency: the ledger shows what the AI sent,
+// the inbox shows what came back. Owner can mark emails read from the UI.
+app.get("/api/companies/:slug/emails", async (c) => {
+  const companyId = await publicCompanyId(c.req.param("slug"));
+  if (!companyId) return c.json({ error: "not_found" }, 404);
+  const direction = c.req.query("direction");
+  const rows = await sql<
+    { id: string; direction: string; from_addr: string; to_addrs: string[]; subject: string; read: boolean; created_at: string }[]
+  >`SELECT id, direction, from_addr, to_addrs, subject, read, created_at
+    FROM emails WHERE company_id = ${companyId}
+    ${direction === "in" || direction === "out" ? sql`AND direction = ${direction}` : sql``}
+    ORDER BY created_at DESC LIMIT 50`;
+  return c.json({
+    companyId,
+    emails: rows.map((e) => ({
+      id: e.id, direction: e.direction, fromAddr: e.from_addr,
+      toAddrs: e.to_addrs, subject: e.subject, read: e.read, createdAt: e.created_at,
+    })),
+  });
+});
+
+app.get("/api/companies/:slug/emails/:emailId", async (c) => {
+  const companyId = await publicCompanyId(c.req.param("slug"));
+  if (!companyId) return c.json({ error: "not_found" }, 404);
+  const [row] = await sql<
+    { id: string; direction: string; from_addr: string; to_addrs: string[]; subject: string; body_text: string | null; body_html: string | null; read: boolean; created_at: string }[]
+  >`SELECT id, direction, from_addr, to_addrs, subject, body_text, body_html, read, created_at
+    FROM emails WHERE id = ${c.req.param("emailId")} AND company_id = ${companyId}`;
+  if (!row) return c.json({ error: "not_found" }, 404);
+  return c.json({
+    companyId,
+    email: {
+      id: row.id, direction: row.direction, fromAddr: row.from_addr,
+      toAddrs: row.to_addrs, subject: row.subject,
+      bodyText: row.body_text, bodyHtml: row.body_html,
+      read: row.read, createdAt: row.created_at,
+    },
+  });
+});
+
+app.post("/companies/:id/emails/:emailId/read", requireAuth, requireCompanyAccess, async (c) => {
+  const [row] = await sql<{ id: string }[]>`
+    UPDATE emails SET read = true
+    WHERE id = ${c.req.param("emailId")} AND company_id = ${c.req.param("id")}
+    RETURNING id`;
+  if (!row) return c.json({ error: "not_found" }, 404);
+  return c.json({ updated: true });
 });
 
 // §10 — money-out. User-initiated (the §7.3 human approval); durable workflow.

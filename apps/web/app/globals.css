@@ -169,3 +169,91 @@ a.card:hover { border-color: var(--accent); }
 .auth-form input:focus { outline: none; border-color: var(--accent); }
 .auth-error { color: var(--red); font-size: 0.85rem; margin: 0; }
 .auth-status { display: flex; align-items: center; gap: 0.6rem; margin-left: auto; }
+
+/* Forms (settings, new company, task composer/editor) */
+.auth-form textarea, .auth-form select {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 0.55rem 0.8rem; color: var(--text); font-size: 0.9rem; font: inherit;
+  resize: vertical;
+}
+.auth-form textarea:focus, .auth-form select:focus { outline: none; border-color: var(--accent); }
+.field { display: flex; flex-direction: column; gap: 0.3rem; }
+.field > .sub { margin: 0; font-size: 0.78rem; }
+.field.check { flex-direction: row; align-items: flex-start; gap: 0.6rem; }
+.field.check input { width: auto; margin-top: 0.25rem; }
+.saved { color: var(--green); font-size: 0.82rem; font-family: var(--mono); }
+
+/* Tasks (links + extra statuses) */
+a.task:hover { border-color: var(--accent); }
+.pill.queued { color: var(--text); }
+.pill.pending { color: var(--muted); }
+
+/* Org chart (M5 — CEO, departments, workers) */
+.agent {
+  display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap;
+  padding: 0.6rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem;
+}
+.agent details { flex-basis: 100%; }
+.agent details summary { cursor: pointer; font-size: 0.78rem; color: var(--muted); }
+.agent details p { margin: 0.4rem 0 0; font-size: 0.82rem; }
+.agent.plan span:not(.pill) { font-size: 0.85rem; }
+.pill.ceo { color: var(--accent); border-color: var(--accent); }
+.pill.department { color: var(--amber); border-color: var(--amber); }
+.pill.worker { color: var(--green); }
+
+/* Task detail result/error panels */
+.detail-block {
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+  padding: 0.9rem 1.25rem; margin-top: 1rem;
+}
+.detail-block > .sub { margin: 0; font-size: 0.72rem; }
+.detail-block p { margin: 0.35rem 0 0; font-size: 0.88rem; white-space: pre-wrap; }
+.detail-block.error { border-color: var(--red); }
+.detail-block.error p { color: var(--red); }
+
+/* Email inbox */
+.email-row {
+  display: grid; grid-template-columns: 14rem 1fr auto;
+  gap: 0.75rem; align-items: baseline;
+  padding: 0.65rem 0; border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+.email-row:hover { color: var(--accent); }
+.email-row.unread .email-subject { font-weight: 600; color: var(--text); }
+.email-from { color: var(--muted); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.email-subject { position: relative; }
+.email-date { font-size: 0.75rem; white-space: nowrap; }
+.unread-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); margin-left: 0.4rem; vertical-align: middle;
+}
+.email-meta { display: flex; flex-wrap: wrap; gap: 1.5rem 2rem; margin: 1rem 0 0; }
+.email-meta div { display: flex; flex-direction: column; gap: 0.15rem; }
+.email-meta .sub { font-size: 0.72rem; margin: 0; }
+@media (max-width: 760px) { .email-row { grid-template-columns: 1fr; gap: 0.1rem; } .email-date { display: none; } }
+
+/* New-company card on the conglomerate dashboard */
+.card.new-company {
+  border-style: dashed; display: flex; flex-direction: column; justify-content: center;
+  color: var(--muted);
+}
+.card.new-company:hover { color: var(--text); }
+.card.new-company h2 { color: var(--accent); }
+
+/* Leaderboard — global P&L ranking */
+.board { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.board th {
+  text-align: left; color: var(--muted); font-size: 0.72rem; font-weight: 500;
+  padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border);
+}
+.board td { padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--border); }
+.board .num { text-align: right; font-variant-numeric: tabular-nums; }
+.board .rank { font-family: var(--mono); color: var(--muted); width: 2.5rem; }
+.board tbody tr:hover { background: var(--panel); }
+.board .board-name:hover { color: var(--accent); }
+.board .pos { color: var(--green); }
+.board .neg { color: var(--red); }
+.board .pnl-cell { font-weight: 600; }
+@media (max-width: 760px) {
+  .board th:nth-child(n+3):not(:last-child), .board td:nth-child(n+3):not(:last-child) { display: none; }
+}

@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCompany, getCompanyEvents } from "@/lib/data";
+import { getAgents, getCompany, getCompanyEvents, getCompanyTasks, getEmails } from "@/lib/data";
 import { CompanyControls } from "./controls";
 import { CompanyTerminal } from "./terminal";
+import { TaskComposer } from "./task-composer";
+import { OrgChart } from "./org";
 
 const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 
@@ -12,7 +14,12 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
   if (!data) notFound();
   const { company, tasks } = data;
 
-  const { companyId, events } = await getCompanyEvents(slug);
+  const [{ companyId, events }, richTasks, org, recentEmails] = await Promise.all([
+    getCompanyEvents(slug),
+    getCompanyTasks(slug),
+    getAgents(slug),
+    getEmails(slug),
+  ]);
   const pnl = (company.revenueCents - company.creditsSpent * 100) / 100; // credits priced ~€1/credit
 
   return (
@@ -21,7 +28,10 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
         ← All companies
       </Link>
       <h1>
-        {company.name} <span className={`dot ${company.status === "paused" ? "paused" : ""}`} style={{ display: "inline-block" }} />
+        {company.name} <span className={`dot ${company.status === "paused" ? "paused" : ""}`} style={{ display: "inline-block" }} />{" "}
+        <Link href={`/c/${slug}/settings`} className="sub" style={{ fontSize: "0.85rem", textDecoration: "underline" }}>
+          settings
+        </Link>
       </h1>
       <p className="sub">{company.mission}</p>
 
@@ -54,20 +64,52 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
         </a>
       </p>
 
+      {recentEmails.length > 0 && (
+        <section style={{ marginTop: "1.5rem" }}>
+          <h2 style={{ fontSize: "1.05rem" }}>
+            Inbox{" "}
+            <Link href={`/c/${slug}/inbox`} className="sub" style={{ fontSize: "0.82rem", textDecoration: "underline" }}>
+              view all
+            </Link>
+          </h2>
+          {recentEmails.slice(0, 4).map((e) => (
+            <Link key={e.id} href={`/c/${slug}/inbox/${e.id}`} className={`email-row ${!e.read ? "unread" : ""}`}>
+              <span className="email-from">{e.direction === "in" ? e.fromAddr : `→ ${e.toAddrs[0]}`}</span>
+              <span className="email-subject">{e.subject}{!e.read && <span className="unread-dot" />}</span>
+            </Link>
+          ))}
+        </section>
+      )}
+
+      <OrgChart agents={org.agents} departmentPlans={org.departmentPlans} />
+
       <div className="tasks">
         <h2 style={{ fontSize: "1.05rem" }}>Tasks</h2>
-        {tasks.length === 0 && <p className="sub">No tasks yet.</p>}
-        {tasks.map((t) => (
-          <div className="task" key={t.title}>
-            <span className={`pill ${t.status}`}>{t.status}</span>
-            <span>{t.title}</span>
-            {t.traceUrl && (
-              <a href={t.traceUrl} className="sub" style={{ marginLeft: "auto", textDecoration: "underline" }}>
-                trace ↗
-              </a>
-            )}
-          </div>
-        ))}
+        {richTasks.length === 0 && tasks.length === 0 && <p className="sub">No tasks yet.</p>}
+        {richTasks.length > 0
+          ? richTasks.map((t) => (
+              <Link className="task" key={t.id} href={`/c/${slug}/tasks/${t.id}`}>
+                <span className={`pill ${t.status}`}>{t.status}</span>
+                <span>{t.title}</span>
+                {t.traceUrl && (
+                  <span className="sub" style={{ marginLeft: "auto", textDecoration: "underline" }}>
+                    trace ↗
+                  </span>
+                )}
+              </Link>
+            ))
+          : tasks.map((t) => (
+              <div className="task" key={t.title}>
+                <span className={`pill ${t.status}`}>{t.status}</span>
+                <span>{t.title}</span>
+                {t.traceUrl && (
+                  <a href={t.traceUrl} className="sub" style={{ marginLeft: "auto", textDecoration: "underline" }}>
+                    trace ↗
+                  </a>
+                )}
+              </div>
+            ))}
+        <TaskComposer companyId={companyId ?? company.id} />
       </div>
 
       <section style={{ marginTop: "2rem" }}>

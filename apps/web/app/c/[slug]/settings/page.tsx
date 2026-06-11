@@ -1,0 +1,33 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { getCompany } from "@/lib/data";
+import { SettingsForm } from "./settings-form";
+
+export default async function SettingsPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  const data = await getCompany(slug);
+  if (!data) notFound();
+  const { company } = data;
+
+  return (
+    <main>
+      <Link href={`/c/${slug}`} className="backlink">
+        ← {company.name}
+      </Link>
+      <h1>Settings</h1>
+      <p className="sub">
+        Owner-only knobs the CEO can never touch: caps, autonomy and public visibility.
+      </p>
+      <SettingsForm
+        companyId={company.id}
+        initial={{
+          name: company.name,
+          mission: company.mission,
+          dailyTaskCap: company.dailyTaskCap,
+          autonomyLevel: company.autonomyLevel,
+          isPublic: company.isPublic,
+        }}
+      />
+    </main>
+  );
+}

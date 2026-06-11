@@ -52,6 +52,12 @@ export default async function Dashboard() {
             </div>
           </Link>
         ))}
+        <Link href="/new" className="card new-company">
+          <h2>＋ New company</h2>
+          <p className="mission">
+            One prompt founds a company: website, email, database, repo and a CEO agent.
+          </p>
+        </Link>
       </div>
 
       <section id="live">

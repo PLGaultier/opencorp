@@ -22,10 +22,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/" className="link">
               Dashboard
             </Link>
+            <Link href="/leaderboard" className="link">
+              Leaderboard
+            </Link>
             <Link href="/live" className="link">
               Live ledger
             </Link>
-            <a href="https://github.com" className="link">
+            <a href="https://github.com/PLGaultier/opencorp" className="link">
               GitHub
             </a>
             <AuthStatus />
