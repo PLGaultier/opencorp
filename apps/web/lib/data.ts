@@ -33,6 +33,17 @@ export interface CompanyTask {
   title: string;
   status: "pending" | "queued" | "running" | "failed" | "done";
   priority: number;
+  /** Langfuse public trace for the task's full LLM transcript (§9.2). */
+  traceUrl?: string | null;
+}
+
+/** Raw ledger event for the company terminal — full (redacted) payload. */
+export interface TerminalEvent {
+  seq: number;
+  actor: string;
+  eventType: string;
+  payload: unknown;
+  createdAt: string;
 }
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
@@ -129,6 +140,36 @@ export async function getCompany(
     return (await res.json()) as { company: Company; tasks: CompanyTask[] };
   } catch {
     return null;
+  }
+}
+
+// Canned terminal transcript so the Vercel preview shows the real shape of a
+// heartbeat: departments → CEO → dispatch → worker steps → brief.
+export const demoTerminal: TerminalEvent[] = [
+  { seq: 101, actor: "dept:cmo", eventType: "department_plan", payload: { headline: "Zero revenue and empty inbox signal need for foundational growth activation.", proposedTasks: ["Launch baseline customer outreach campaign"] }, createdAt: ago(9) },
+  { seq: 102, actor: "dept:cto", eventType: "department_plan", payload: { headline: "Day 1 post-launch: recommend diagnostics before scaling.", proposedTasks: ["Verify website is live and publicly accessible"] }, createdAt: ago(9) },
+  { seq: 103, actor: "dept:cfo", eventType: "department_plan", payload: { headline: "Critical: €5 credit runway with zero revenue requires immediate revenue focus.", proposedTasks: [] }, createdAt: ago(9) },
+  { seq: 104, actor: "ceo", eventType: "ceo_plan", payload: { createdTasks: ["Verify website is live and publicly accessible"], promptHash: "a1b2c3d4e5f60708" }, createdAt: ago(8) },
+  { seq: 105, actor: "system", eventType: "credit_change", payload: { delta: -1, reason: "task_charge" }, createdAt: ago(8) },
+  { seq: 106, actor: "system", eventType: "task_state", payload: { title: "Verify website is live and publicly accessible", status: "running" }, createdAt: ago(8) },
+  { seq: 107, actor: "worker:t-42", eventType: "worker_step", payload: { n: 1, thought: "Reading the mission for context before checking the deployment.", tool: "org.read_mission" }, createdAt: ago(7) },
+  { seq: 108, actor: "worker:t-42", eventType: "tool_call", payload: { server: "org", tool: "read_mission", outcome: "ok" }, createdAt: ago(7) },
+  { seq: 109, actor: "worker:t-42", eventType: "worker_step", payload: { n: 2, thought: "Checking deploy status to confirm the storefront is live.", tool: "web.get_deploy_status" }, createdAt: ago(6) },
+  { seq: 110, actor: "worker:t-42", eventType: "tool_call", payload: { server: "web", tool: "get_deploy_status", outcome: "ok" }, createdAt: ago(6) },
+  { seq: 111, actor: "system", eventType: "task_state", payload: { title: "Verify website is live and publicly accessible", status: "done", resultSummary: "Deployment confirmed live; browser-level verification flagged for follow-up." }, createdAt: ago(5) },
+  { seq: 112, actor: "ceo", eventType: "daily_brief", payload: { brief: "Day 1: storefront confirmed live. Next heartbeat pivots to customer acquisition. Dispatched 1 task(s); stopped because: daily_task_cap_reached." }, createdAt: ago(5) },
+];
+
+export async function getCompanyEvents(
+  slug: string,
+): Promise<{ companyId: string | null; events: TerminalEvent[] }> {
+  if (!API_URL) return { companyId: null, events: demoTerminal };
+  try {
+    const res = await fetch(`${API_URL}/api/companies/${slug}/events?limit=200`, { cache: "no-store" });
+    if (!res.ok) return { companyId: null, events: [] };
+    return (await res.json()) as { companyId: string; events: TerminalEvent[] };
+  } catch {
+    return { companyId: null, events: [] };
   }
 }
 

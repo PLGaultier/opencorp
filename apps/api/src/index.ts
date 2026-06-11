@@ -1,9 +1,26 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import postgres from "postgres";
 import { Ledger, PgStore } from "@opencorp/ledgerd";
-import { startCreateCompany, startHeartbeat, startTaskRun, startWithdrawal } from "@opencorp/workflows";
+import { ceoChat, llmConfigFromEnv, publicTraceUrl, traceConfigFromEnv, tracerFromEnv } from "@opencorp/llm";
+import {
+  applyCeoPlan,
+  backfillHeartbeatSchedules,
+  ceoCompany,
+  describeHeartbeatSchedule,
+  ensureHeartbeatSchedule,
+  gatherCeoContext,
+  loadCeoPrompt,
+  pauseHeartbeatSchedule,
+  resumeHeartbeatSchedule,
+  startCreateCompany,
+  startHeartbeat,
+  startTaskRun,
+  startWithdrawal,
+} from "@opencorp/workflows";
+import { PLANS, PgBillingStore, billingProviderFromEnv, runGrantCycle, subscribe } from "./billing";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp";
@@ -12,6 +29,10 @@ const ledger = new Ledger(store);
 const sql = postgres(databaseUrl, { max: 5 });
 
 const app = new Hono();
+
+// Public transparency API + dashboard controls are called from the browser on
+// another origin (Next.js dev server, Vercel). Auth lands in a later milestone.
+app.use("*", cors());
 
 app.get("/healthz", (c) => c.json({ ok: true, service: "opencorp-api" }));
 
@@ -53,11 +74,44 @@ app.get("/api/companies/:slug", async (c) => {
   const [row] = await sql<PnlRow[]>`
     SELECT ${PNL_COLUMNS} FROM companies c WHERE c.slug = ${c.req.param("slug")} AND c.is_public = true`;
   if (!row) return c.json({ error: "not_found" }, 404);
-  const tasks = await sql`
-    SELECT title, status, priority FROM tasks
+  const traceCfg = traceConfigFromEnv();
+  const tasks = await sql<{ title: string; status: string; priority: number; trace_id: string | null }[]>`
+    SELECT title, status, priority, trace_id FROM tasks
     WHERE company_id = ${row.id} AND status <> 'deleted'
     ORDER BY priority DESC, created_at DESC LIMIT 25`;
-  return c.json({ company: toPnl(row), tasks });
+  return c.json({
+    company: toPnl(row),
+    // §9.2 — every task links to its full Langfuse public trace
+    tasks: tasks.map((t) => ({
+      title: t.title,
+      status: t.status,
+      priority: t.priority,
+      traceUrl: t.trace_id && traceCfg ? publicTraceUrl(traceCfg, t.trace_id) : null,
+    })),
+  });
+});
+
+// §9.2 — per-company event history (full redacted payloads) powering the
+// dashboard terminal. Public companies only.
+app.get("/api/companies/:slug/events", async (c) => {
+  const [co] = await sql<{ id: string }[]>`
+    SELECT id FROM companies WHERE slug = ${c.req.param("slug")} AND is_public = true`;
+  if (!co) return c.json({ error: "not_found" }, 404);
+  const limit = Math.min(Number(c.req.query("limit") ?? 200), 1000);
+  const rows = await sql<
+    { seq: string; actor: string; event_type: string; payload: unknown; created_at: string }[]
+  >`SELECT seq, actor, event_type, payload, created_at FROM ledger_events
+    WHERE company_id = ${co.id} ORDER BY seq DESC LIMIT ${limit}`;
+  return c.json({
+    companyId: co.id,
+    events: rows.reverse().map((r) => ({
+      seq: Number(r.seq),
+      actor: r.actor,
+      eventType: r.event_type,
+      payload: r.payload,
+      createdAt: r.created_at,
+    })),
+  });
 });
 
 // §6 — one prompt → company. Auth lands in a later milestone; conglomerateId
@@ -75,12 +129,151 @@ app.post("/companies", async (c) => {
 app.post("/companies/:id/heartbeat", async (c) =>
   c.json(await startHeartbeat(c.req.param("id"))),
 );
+
+// §1 feature 5 / §5.2 — the autonomous clock: per-company Temporal cron
+// schedule. Pause/resume are owner controls; the CEO cannot reach them.
+app.get("/companies/:id/schedule", async (c) => {
+  const info = await describeHeartbeatSchedule(c.req.param("id"));
+  return info ? c.json(info) : c.json({ error: "not_scheduled" }, 404);
+});
+
+app.post("/companies/:id/schedule", async (c) => {
+  const companyId = c.req.param("id");
+  const [co] = await sql<{ id: string }[]>`SELECT id FROM companies WHERE id = ${companyId}`;
+  if (!co) return c.json({ error: "not_found" }, 404);
+  const { scheduleId, created } = await ensureHeartbeatSchedule(companyId);
+  if (created) {
+    await ledger.append({
+      companyId,
+      actor: "user",
+      eventType: "heartbeat_scheduled",
+      payload: { scheduleId, cron: process.env.HEARTBEAT_CRON ?? "0 7 * * *" },
+    });
+  }
+  return c.json({ scheduleId, created });
+});
+
+app.post("/companies/:id/pause", async (c) => {
+  const companyId = c.req.param("id");
+  const [co] = await sql<{ id: string }[]>`
+    UPDATE companies SET status = 'paused' WHERE id = ${companyId} RETURNING id`;
+  if (!co) return c.json({ error: "not_found" }, 404);
+  try {
+    await pauseHeartbeatSchedule(companyId);
+  } catch {
+    // pre-schedule company: status alone stops dispatch (pickNextTask)
+  }
+  await ledger.append({
+    companyId,
+    actor: "user",
+    eventType: "company_status",
+    payload: { status: "paused" },
+  });
+  return c.json({ status: "paused" });
+});
+
+app.post("/companies/:id/resume", async (c) => {
+  const companyId = c.req.param("id");
+  const [co] = await sql<{ id: string }[]>`
+    UPDATE companies SET status = 'active' WHERE id = ${companyId} RETURNING id`;
+  if (!co) return c.json({ error: "not_found" }, 404);
+  try {
+    await resumeHeartbeatSchedule(companyId);
+  } catch {
+    /* no schedule yet — POST /companies/:id/schedule creates one */
+  }
+  await ledger.append({
+    companyId,
+    actor: "user",
+    eventType: "company_status",
+    payload: { status: "active" },
+  });
+  return c.json({ status: "active" });
+});
+
+// One-time migration: give every pre-scheduling company its daily clock.
+app.post("/admin/schedules/backfill", async (c) => {
+  const results = await backfillHeartbeatSchedules(sql);
+  for (const r of results.filter((r) => r.created)) {
+    await ledger.append({
+      companyId: r.companyId,
+      actor: "system",
+      eventType: "heartbeat_scheduled",
+      payload: { scheduleId: `heartbeat-schedule:${r.companyId}`, cron: process.env.HEARTBEAT_CRON ?? "0 7 * * *", backfill: true },
+    });
+  }
+  return c.json({ scheduled: results.filter((r) => r.created).length, total: results.length });
+});
 app.post("/tasks/:id/run", async (c) => {
   try {
     return c.json(await startTaskRun(c.req.param("id")));
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
   }
+});
+
+// §1 feature 2 — chat with the CEO. Free (never charges credits); the CEO can
+// queue tasks and patch the mission, never pause the company or change caps.
+// The conversation itself is a ledger event — transparency includes the boss.
+app.post("/companies/:id/chat", async (c) => {
+  const body = z
+    .object({ message: z.string().min(1).max(8000) })
+    .safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  const companyId = c.req.param("id");
+
+  let company;
+  try {
+    company = await ceoCompany(sql, companyId);
+  } catch {
+    return c.json({ error: "not_found" }, 404);
+  }
+  const ctx = await gatherCeoContext(sql, company);
+  const { system, hash } = loadCeoPrompt(company);
+
+  // history = prior ceo_chat ledger events (no hidden memory, §5.4)
+  const prior = await sql<{ payload: { message: string; reply: string } }[]>`
+    SELECT payload FROM ledger_events
+    WHERE company_id = ${companyId} AND event_type = 'ceo_chat'
+    ORDER BY seq DESC LIMIT 10`;
+  const history = prior
+    .reverse()
+    .flatMap((r) => [
+      { role: "user" as const, text: r.payload.message },
+      { role: "ceo" as const, text: r.payload.reply },
+    ]);
+
+  const tracer = tracerFromEnv();
+  const traceId = `ceo-chat-${companyId}-${Date.now()}`;
+  const reply = await ceoChat(
+    llmConfigFromEnv(),
+    system,
+    ctx,
+    history,
+    body.data.message,
+    tracer ? { tracer, traceId, name: "ceo-chat" } : undefined,
+  );
+  await tracer?.flush();
+
+  const applied = await applyCeoPlan(
+    sql,
+    ledger,
+    company,
+    { new_tasks: reply.new_tasks, mission_patch: null },
+    { promptHash: hash, source: "chat" },
+  );
+  await ledger.append({
+    companyId,
+    actor: "ceo",
+    eventType: "ceo_chat",
+    payload: {
+      message: body.data.message,
+      reply: reply.reply,
+      createdTasks: applied.createdTasks,
+      promptHash: hash,
+    },
+  });
+  return c.json({ reply: reply.reply, createdTasks: applied.createdTasks });
 });
 
 // §10 — money-out. User-initiated (the §7.3 human approval); durable workflow.
@@ -96,12 +289,66 @@ app.post("/companies/:id/withdraw", async (c) => {
   }
 });
 
-// §9.2 — live firehose via PG LISTEN/NOTIFY → SSE (no extra broker, §11.5)
+// §10 — billing plans. Lago (when configured) mirrors subscriptions for
+// invoicing; the credit ledger is always the source of truth.
+const billingStore = new PgBillingStore(sql);
+const billingProvider = billingProviderFromEnv();
+const appendGrant = (payload: Record<string, unknown>) =>
+  ledger.append({ companyId: null, actor: "system", eventType: "credit_change", payload });
+
+app.get("/api/plans", (c) =>
+  c.json({ plans: Object.values(PLANS), provider: billingProvider.kind }),
+);
+
+app.post("/conglomerates/:id/subscribe", async (c) => {
+  const body = z
+    .object({ plan: z.enum(["free", "builder", "pro"]) })
+    .safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  try {
+    const sub = await subscribe(billingStore, billingProvider, appendGrant, c.req.param("id"), body.data.plan);
+    return c.json({ subscription: sub });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 422);
+  }
+});
+
+// Cron-invoked (idempotent): grant the new cycle's credits to recurring plans.
+app.post("/billing/grant-cycle", async (c) =>
+  c.json(await runGrantCycle(billingStore, appendGrant)),
+);
+
+// §9.2 — live firehose via PG LISTEN/NOTIFY → SSE (no extra broker, §11.5).
+// `?company=<id>` filters server-side and enriches each frame with the full
+// (redacted) event row, so the dashboard terminal can render real lines.
 const listenSql = postgres(databaseUrl, { max: 1 });
-app.get("/api/live", (c) =>
-  streamSSE(c, async (stream) => {
+app.get("/api/live", (c) => {
+  const companyFilter = c.req.query("company") || null;
+  return streamSSE(c, async (stream) => {
     const { unlisten } = await listenSql.listen("ledger_events", (payload) => {
-      void stream.writeSSE({ event: "ledger", data: payload });
+      void (async () => {
+        if (!companyFilter) {
+          await stream.writeSSE({ event: "ledger", data: payload });
+          return;
+        }
+        const thin = JSON.parse(payload) as { seq: number; companyId: string | null };
+        if (thin.companyId !== companyFilter) return;
+        const [row] = await sql<
+          { seq: string; actor: string; event_type: string; payload: unknown; created_at: string }[]
+        >`SELECT seq, actor, event_type, payload, created_at FROM ledger_events WHERE seq = ${thin.seq}`;
+        if (!row) return;
+        await stream.writeSSE({
+          event: "ledger",
+          data: JSON.stringify({
+            seq: Number(row.seq),
+            companyId: companyFilter,
+            actor: row.actor,
+            eventType: row.event_type,
+            payload: row.payload,
+            createdAt: row.created_at,
+          }),
+        });
+      })().catch(() => {});
     });
     stream.onAbort(() => void unlisten());
     // keepalive comments so proxies don't drop the stream
@@ -109,8 +356,8 @@ app.get("/api/live", (c) =>
       await stream.writeSSE({ event: "ping", data: String(Date.now()) });
       await stream.sleep(15_000);
     }
-  }),
-);
+  });
+});
 
 // §9.2 — paginated raw events + verification endpoint
 app.get("/api/ledger", async (c) => {
@@ -147,4 +394,7 @@ app.get("/api/ledger/head", async (c) => {
 
 const port = Number(process.env.PORT ?? 3001);
 console.log(`opencorp-api listening on :${port}`);
-export default { port, fetch: app.fetch };
+// idleTimeout: heartbeat/withdraw block on Temporal workflow completion, which
+// with a real LLM takes minutes — Bun's 10 s default resets the socket (255 s
+// is Bun's maximum).
+export default { port, fetch: app.fetch, idleTimeout: 255 };

@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCompany, getLedger } from "@/lib/data";
-import { LedgerFeed } from "../../ledger-feed";
+import { getCompany, getCompanyEvents } from "@/lib/data";
+import { CompanyControls } from "./controls";
+import { CompanyTerminal } from "./terminal";
 
 const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 
@@ -11,7 +12,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
   if (!data) notFound();
   const { company, tasks } = data;
 
-  const events = (await getLedger()).filter((e) => e.companySlug === slug);
+  const { companyId, events } = await getCompanyEvents(slug);
   const pnl = (company.revenueCents - company.creditsSpent * 100) / 100; // credits priced ~€1/credit
 
   return (
@@ -60,12 +61,21 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
           <div className="task" key={t.title}>
             <span className={`pill ${t.status}`}>{t.status}</span>
             <span>{t.title}</span>
+            {t.traceUrl && (
+              <a href={t.traceUrl} className="sub" style={{ marginLeft: "auto", textDecoration: "underline" }}>
+                trace ↗
+              </a>
+            )}
           </div>
         ))}
       </div>
 
       <section style={{ marginTop: "2rem" }}>
-        <LedgerFeed initialEvents={events} companySlug={slug} />
+        <CompanyControls companyId={companyId ?? company.id} initialStatus={company.status} />
+      </section>
+
+      <section style={{ marginTop: "1rem" }}>
+        <CompanyTerminal companyId={companyId ?? company.id} initialEvents={events} />
       </section>
     </main>
   );

@@ -4,7 +4,9 @@ Open-source, self-hostable platform for autonomous AI-run companies with
 **radical transparency**: every agent decision, tool call, token spent, and
 cent earned lands on a public, hash-chained ledger.
 
-Full spec: [OPENCORP_SPEC.md](./OPENCORP_SPEC.md). Current milestone: **M0 — Skeleton**.
+Full spec: [OPENCORP_SPEC.md](./OPENCORP_SPEC.md). Current milestone: **M5 — Frontier (in progress)**:
+- **Multi-agent departments** — every heartbeat, CMO/CTO/CFO sub-planners (`prompts/dept_*.md`) review the company through their own lens and publish `department_plan` proposals to the ledger; the CEO synthesizes them into the final plan.
+- **Autonomous heartbeats** — every company gets a per-company Temporal Schedule (daily cron, `HEARTBEAT_CRON`) created at provisioning; pause/resume are owner-only API controls (`POST /companies/:id/pause|resume`), and `POST /admin/schedules/backfill` migrates pre-existing companies. Companies now run with zero human involvement — the §16 "daily autonomous task runs" requirement.
 
 ## Layout
 
