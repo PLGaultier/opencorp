@@ -2,6 +2,8 @@
  * Minimal OpenAI-compatible chat client pointed at the LiteLLM proxy (§3).
  * Tier names ("frontier" | "standard" | "mini") map to LiteLLM model_list.
  */
+import type { Tracer } from "./trace";
+
 export type ModelTier = "frontier" | "standard" | "mini";
 
 export interface ChatOptions {
@@ -10,6 +12,8 @@ export interface ChatOptions {
   user: string;
   jsonOnly?: boolean;
   maxTokens?: number;
+  /** When set, the generation is recorded on the Langfuse trace (§9.2). */
+  trace?: { tracer: Tracer; traceId: string; name?: string };
 }
 
 export interface LlmConfig {
@@ -24,6 +28,7 @@ export function llmConfigFromEnv(): LlmConfig | null {
 }
 
 export async function chat(cfg: LlmConfig, opts: ChatOptions): Promise<string> {
+  const startTime = new Date();
   const res = await fetch(`${cfg.baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -43,8 +48,26 @@ export async function chat(cfg: LlmConfig, opts: ChatOptions): Promise<string> {
   if (!res.ok) {
     throw new Error(`llm ${opts.tier} failed: ${res.status} ${await res.text()}`);
   }
-  const data = (await res.json()) as { choices: { message: { content: string } }[] };
+  const data = (await res.json()) as {
+    choices: { message: { content: string } }[];
+    model?: string;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
   const content = data.choices[0]?.message?.content;
   if (!content) throw new Error("llm returned empty completion");
+  if (opts.trace) {
+    opts.trace.tracer.generation({
+      traceId: opts.trace.traceId,
+      name: opts.trace.name ?? "chat",
+      model: data.model ?? opts.tier,
+      input: { system: opts.system, user: opts.user },
+      output: content,
+      ...(data.usage
+        ? { usage: { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0 } }
+        : {}),
+      startTime,
+      endTime: new Date(),
+    });
+  }
   return content;
 }

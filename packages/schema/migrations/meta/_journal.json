@@ -8,6 +8,20 @@
       "when": 1781037542803,
       "tag": "0000_mighty_rictor",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781073553637,
+      "tag": "0001_cloudy_puff_adder",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781162242664,
+      "tag": "0002_slim_leech",
+      "breakpoints": true
     }
   ]
 }

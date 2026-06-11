@@ -24,7 +24,8 @@ const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
 // ── Enums ──────────────────────────────────────────────────────────────────
 export const companyStatus = pgEnum("company_status", ["active", "paused"]);
 export const autonomyLevel = pgEnum("autonomy_level", ["supervised", "bounded", "full"]);
-export const agentKind = pgEnum("agent_kind", ["ceo", "worker"]);
+// "department" = persistent sub-planners (CMO/CTO/CFO, §14 M5); name carries the role
+export const agentKind = pgEnum("agent_kind", ["ceo", "worker", "department"]);
 export const modelTier = pgEnum("model_tier", ["frontier", "standard", "mini"]);
 export const taskStatus = pgEnum("task_status", [
   "pending",
@@ -49,6 +50,8 @@ export const withdrawalStatus = pgEnum("withdrawal_status", [
   "paid",
   "failed",
 ]);
+export const planId = pgEnum("plan_id", ["free", "builder", "pro"]);
+export const subscriptionStatus = pgEnum("subscription_status", ["active", "canceled"]);
 
 // ── Tenancy ────────────────────────────────────────────────────────────────
 export const conglomerates = pgTable("conglomerates", {
@@ -120,6 +123,7 @@ export const tasks = pgTable(
     creditsEstimated: numeric("credits_estimated"),
     creditsCharged: numeric("credits_charged"),
     temporalWorkflowId: text("temporal_workflow_id"),
+    traceId: text("trace_id"), // Langfuse public trace (§9.2)
     resultSummary: text("result_summary"),
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -217,6 +221,24 @@ export const payments = pgTable("payments", {
   providerRef: text("provider_ref"),
   feeCents: bigint("fee_cents", { mode: "number" }).notNull().default(0),
   netCents: bigint("net_cents", { mode: "number" }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── Billing plans (§10): one subscription per conglomerate ─────────────────
+// Credits remain the source of truth in credit_entries; Lago (when configured)
+// handles invoicing. Repo access is always free regardless of plan.
+export const subscriptions = pgTable("subscriptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  conglomerateId: uuid("conglomerate_id")
+    .notNull()
+    .unique()
+    .references(() => conglomerates.id),
+  plan: planId("plan").notNull(),
+  status: subscriptionStatus("status").notNull().default("active"),
+  providerRef: text("provider_ref"), // Lago subscription external id
+  currentPeriodStart: timestamp("current_period_start", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { chat, llmConfigFromEnv } from "@opencorp/llm";
+import { chat, llmConfigFromEnv, tracerFromEnv } from "@opencorp/llm";
 import { callTool } from "@opencorp/mcp-client";
 import { scriptedPolicy } from "./scripted";
 
@@ -18,6 +18,8 @@ export interface WorkerTaskInput {
   task: { id: string; title: string; description: string };
   company: { name: string; slug: string; mission: string };
   budgets?: { maxSteps?: number; maxWallClockMs?: number };
+  /** Langfuse trace id (§9.2); convention: the task id. */
+  traceId?: string;
   onStep?: (step: { n: number; thought: string; tool?: string }) => void;
 }
 
@@ -61,41 +63,50 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
 
   const maxSteps = input.budgets?.maxSteps ?? 80;
   const deadline = Date.now() + (input.budgets?.maxWallClockMs ?? 30 * 60_000);
+  const tracer = input.traceId ? tracerFromEnv() : null;
   const transcript: string[] = [
     `Task: ${input.task.title}\n${input.task.description}\nCompany: ${input.company.name} — mission: ${input.company.mission}`,
   ];
 
-  for (let n = 1; n <= maxSteps; n++) {
-    if (Date.now() > deadline) throw new Error("wall_clock_budget_exceeded");
-    const raw = await chat(cfg, {
-      tier: "standard",
-      system: SYSTEM,
-      user: transcript.join("\n\n"),
-      jsonOnly: true,
-    });
-    const parsed = Action.safeParse(tryJson(raw));
-    if (!parsed.success) {
-      transcript.push(`Your last output was invalid JSON for the action schema. Retry.`);
-      continue;
+  try {
+    for (let n = 1; n <= maxSteps; n++) {
+      if (Date.now() > deadline) throw new Error("wall_clock_budget_exceeded");
+      const raw = await chat(cfg, {
+        tier: "standard",
+        system: SYSTEM,
+        user: transcript.join("\n\n"),
+        jsonOnly: true,
+        trace:
+          tracer && input.traceId
+            ? { tracer, traceId: input.traceId, name: `step-${n}` }
+            : undefined,
+      });
+      const parsed = Action.safeParse(tryJson(raw));
+      if (!parsed.success) {
+        transcript.push(`Your last output was invalid JSON for the action schema. Retry.`);
+        continue;
+      }
+      const { thought, action } = parsed.data;
+      if ("final" in action) {
+        input.onStep?.({ n, thought });
+        return { summary: action.final, steps: n };
+      }
+      input.onStep?.({ n, thought, tool: `${action.server}.${action.tool}` });
+      const result = await callTool(
+        input.gatewayUrl,
+        input.token,
+        action.server,
+        action.tool,
+        action.args,
+      );
+      transcript.push(
+        `Step ${n}: called ${action.server}.${action.tool}\nResult: ${JSON.stringify(result).slice(0, 4000)}`,
+      );
     }
-    const { thought, action } = parsed.data;
-    if ("final" in action) {
-      input.onStep?.({ n, thought });
-      return { summary: action.final, steps: n };
-    }
-    input.onStep?.({ n, thought, tool: `${action.server}.${action.tool}` });
-    const result = await callTool(
-      input.gatewayUrl,
-      input.token,
-      action.server,
-      action.tool,
-      action.args,
-    );
-    transcript.push(
-      `Step ${n}: called ${action.server}.${action.tool}\nResult: ${JSON.stringify(result).slice(0, 4000)}`,
-    );
+    throw new Error("step_budget_exceeded");
+  } finally {
+    await tracer?.flush(); // ship the trace even when the task fails (§9.2)
   }
-  throw new Error("step_budget_exceeded");
 }
 
 function tryJson(s: string): unknown {

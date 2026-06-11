@@ -9,6 +9,7 @@
   "dependencies": {
     "hono": "^4.6.0",
     "@opencorp/ledgerd": "workspace:*",
+    "@opencorp/llm": "workspace:*",
     "@opencorp/workflows": "workspace:*",
     "@opencorp/schema": "workspace:*",
     "postgres": "^3.4.5",
