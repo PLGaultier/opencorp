@@ -211,6 +211,15 @@ a.task:hover { border-color: var(--accent); }
 .detail-block.error { border-color: var(--red); }
 .detail-block.error p { color: var(--red); }
 
+/* Product catalogue */
+.product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+.product-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 0.35rem;
+}
+.product-name { font-size: 0.9rem; font-weight: 500; }
+.product-price { font-size: 1.15rem; font-variant-numeric: tabular-nums; color: var(--green); font-weight: 600; }
+
 /* Email inbox */
 .email-row {
   display: grid; grid-template-columns: 14rem 1fr auto;

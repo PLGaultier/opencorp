@@ -502,6 +502,60 @@ app.post("/companies/:id/chat", requireAuth, requireCompanyAccess, async (c) => 
   return c.json({ reply: reply.reply, createdTasks: applied.createdTasks });
 });
 
+// §8 — products the CEO created (public catalogue) and payment history.
+// Payment links are deterministic: {checkoutBase}/pay/{slug}/{productId}.
+const checkoutBase =
+  process.env.CHECKOUT_BASE_URL ?? "http://localhost:3002/checkout";
+
+app.get("/api/companies/:slug/products", async (c) => {
+  const slug = c.req.param("slug");
+  const companyId = await publicCompanyId(slug);
+  if (!companyId) return c.json({ error: "not_found" }, 404);
+  const rows = await sql<
+    { id: string; name: string; price_cents: string; currency: string }[]
+  >`SELECT id, name, price_cents, currency FROM products WHERE company_id = ${companyId} ORDER BY name`;
+  return c.json({
+    companyId,
+    products: rows.map((p) => ({
+      id: p.id,
+      name: p.name,
+      priceCents: Number(p.price_cents),
+      currency: p.currency,
+      paymentLink: `${checkoutBase}/pay/${slug}/${p.id}`,
+    })),
+  });
+});
+
+app.get("/api/companies/:slug/payments", async (c) => {
+  const companyId = await publicCompanyId(c.req.param("slug"));
+  if (!companyId) return c.json({ error: "not_found" }, 404);
+  const limit = Math.min(Number(c.req.query("limit") ?? 50), 200);
+  const rows = await sql<
+    { id: string; product_id: string | null; product_name: string | null; amount_cents: string; currency: string; fee_cents: string; net_cents: string; created_at: string }[]
+  >`SELECT pay.id, pay.product_id, pr.name AS product_name,
+      pay.amount_cents, pay.currency, pay.fee_cents, pay.net_cents, pay.created_at
+    FROM payments pay LEFT JOIN products pr ON pr.id = pay.product_id
+    WHERE pay.company_id = ${companyId}
+    ORDER BY pay.created_at DESC LIMIT ${limit}`;
+  const gross = rows.reduce((s, r) => s + Number(r.amount_cents), 0);
+  const fees  = rows.reduce((s, r) => s + Number(r.fee_cents), 0);
+  const net   = rows.reduce((s, r) => s + Number(r.net_cents), 0);
+  return c.json({
+    companyId,
+    summary: { grossCents: gross, feesCents: fees, netCents: net, count: rows.length },
+    payments: rows.map((r) => ({
+      id: r.id,
+      productId: r.product_id,
+      productName: r.product_name,
+      amountCents: Number(r.amount_cents),
+      currency: r.currency,
+      feeCents: Number(r.fee_cents),
+      netCents: Number(r.net_cents),
+      createdAt: r.created_at,
+    })),
+  });
+});
+
 // §1 feature 3 — the company's real email inbox (Stalwart JMAP). Public read
 // mirrors the tasks/agents transparency: the ledger shows what the AI sent,
 // the inbox shows what came back. Owner can mark emails read from the UI.

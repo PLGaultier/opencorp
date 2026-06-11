@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getAgents, getCompany, getCompanyEvents, getCompanyTasks, getEmails } from "@/lib/data";
+import { getAgents, getCompany, getCompanyEvents, getCompanyTasks, getEmails, getProducts } from "@/lib/data";
 import { CompanyControls } from "./controls";
 import { CompanyTerminal } from "./terminal";
 import { TaskComposer } from "./task-composer";
@@ -14,11 +14,12 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
   if (!data) notFound();
   const { company, tasks } = data;
 
-  const [{ companyId, events }, richTasks, org, recentEmails] = await Promise.all([
+  const [{ companyId, events }, richTasks, org, recentEmails, products] = await Promise.all([
     getCompanyEvents(slug),
     getCompanyTasks(slug),
     getAgents(slug),
     getEmails(slug),
+    getProducts(slug),
   ]);
   const pnl = (company.revenueCents - company.creditsSpent * 100) / 100; // credits priced ~€1/credit
 
@@ -63,6 +64,25 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
           {slug}.opencorp.app
         </a>
       </p>
+
+      {products.length > 0 && (
+        <section style={{ marginTop: "1.5rem" }}>
+          <h2 style={{ fontSize: "1.05rem" }}>
+            Products{" "}
+            <Link href={`/c/${slug}/revenue`} className="sub" style={{ fontSize: "0.82rem", textDecoration: "underline" }}>
+              revenue & payments ↗
+            </Link>
+          </h2>
+          <div className="product-grid">
+            {products.map((p) => (
+              <div key={p.id} className="product-card">
+                <span className="product-name">{p.name}</span>
+                <span className="product-price">{(p.priceCents / 100).toFixed(2)} {p.currency.toUpperCase()}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {recentEmails.length > 0 && (
         <section style={{ marginTop: "1.5rem" }}>

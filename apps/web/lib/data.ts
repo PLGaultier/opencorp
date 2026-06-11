@@ -74,6 +74,34 @@ export interface DepartmentPlan {
   createdAt: string;
 }
 
+/** A product the CEO created (catalogue entry). */
+export interface Product {
+  id: string;
+  name: string;
+  priceCents: number;
+  currency: string;
+  paymentLink: string;
+}
+
+/** A completed payment recorded against a product. */
+export interface Payment {
+  id: string;
+  productId: string | null;
+  productName: string | null;
+  amountCents: number;
+  currency: string;
+  feeCents: number;
+  netCents: number;
+  createdAt: string;
+}
+
+export interface RevenueSummary {
+  grossCents: number;
+  feesCents: number;
+  netCents: number;
+  count: number;
+}
+
 /** An email in the company's Stalwart mailbox (inbound or outbound). */
 export interface Email {
   id: string;
@@ -184,6 +212,37 @@ export const demoAgents: Record<string, Agent[]> = {
     { id: "b3", kind: "department", name: "CTO", rolePrompt: "You are the CTO. Propose technical tasks each heartbeat.", modelTier: "light" },
     { id: "b4", kind: "department", name: "CFO", rolePrompt: "You are the CFO. Propose financial priorities each heartbeat.", modelTier: "light" },
   ],
+};
+
+export const demoProducts: Record<string, Product[]> = {
+  "sell-handmade-ceramic": [
+    { id: "p1", name: "Handmade mug, classic", priceCents: 2900, currency: "eur", paymentLink: "#demo-payment-link" },
+    { id: "p2", name: "Handmade mug, glazed (limited)", priceCents: 4500, currency: "eur", paymentLink: "#demo-payment-link" },
+  ],
+  "a-newsletter-about": [
+    { id: "p3", name: "Newsletter subscription — monthly", priceCents: 500, currency: "eur", paymentLink: "#demo-payment-link" },
+  ],
+};
+
+export const demoPayments: Record<string, { summary: RevenueSummary; payments: Payment[] }> = {
+  "sell-handmade-ceramic": {
+    summary: { grossCents: 5800, feesCents: 203, netCents: 5597, count: 2 },
+    payments: [
+      { id: "pay1", productId: "p1", productName: "Handmade mug, classic", amountCents: 2900, currency: "eur", feeCents: 101, netCents: 2799, createdAt: ago(26) },
+      { id: "pay2", productId: "p1", productName: "Handmade mug, classic", amountCents: 2900, currency: "eur", feeCents: 102, netCents: 2798, createdAt: ago(120) },
+    ],
+  },
+  "a-newsletter-about": {
+    summary: { grossCents: 2900, feesCents: 102, netCents: 2798, count: 1 },
+    payments: [
+      { id: "pay3", productId: "p3", productName: "Newsletter subscription — monthly", amountCents: 500, currency: "eur", feeCents: 18, netCents: 482, createdAt: ago(60) },
+      { id: "pay4", productId: "p3", productName: "Newsletter subscription — monthly", amountCents: 500, currency: "eur", feeCents: 18, netCents: 482, createdAt: ago(90) },
+      { id: "pay5", productId: "p3", productName: "Newsletter subscription — monthly", amountCents: 500, currency: "eur", feeCents: 18, netCents: 482, createdAt: ago(150) },
+      { id: "pay6", productId: "p3", productName: "Newsletter subscription — monthly", amountCents: 500, currency: "eur", feeCents: 18, netCents: 482, createdAt: ago(200) },
+      { id: "pay7", productId: "p3", productName: "Newsletter subscription — monthly", amountCents: 500, currency: "eur", feeCents: 18, netCents: 482, createdAt: ago(250) },
+      { id: "pay8", productId: "p3", productName: "Newsletter subscription — monthly", amountCents: 500, currency: "eur", feeCents: 18, netCents: 482, createdAt: ago(280) },
+    ],
+  },
 };
 
 export const demoEmails: Record<string, Email[]> = {
@@ -325,6 +384,32 @@ export async function getCompanyEvents(
     return (await res.json()) as { companyId: string; events: TerminalEvent[] };
   } catch {
     return { companyId: null, events: [] };
+  }
+}
+
+export async function getProducts(slug: string): Promise<Product[]> {
+  if (!API_URL) return demoProducts[slug] ?? [];
+  try {
+    const res = await fetch(`${API_URL}/api/companies/${slug}/products`, { next: { revalidate: 30 } });
+    if (!res.ok) return [];
+    const { products } = (await res.json()) as { products: Product[] };
+    return products;
+  } catch {
+    return [];
+  }
+}
+
+export async function getPayments(
+  slug: string,
+): Promise<{ summary: RevenueSummary; payments: Payment[] }> {
+  if (!API_URL)
+    return demoPayments[slug] ?? { summary: { grossCents: 0, feesCents: 0, netCents: 0, count: 0 }, payments: [] };
+  try {
+    const res = await fetch(`${API_URL}/api/companies/${slug}/payments`, { next: { revalidate: 30 } });
+    if (!res.ok) return { summary: { grossCents: 0, feesCents: 0, netCents: 0, count: 0 }, payments: [] };
+    return (await res.json()) as { summary: RevenueSummary; payments: Payment[] };
+  } catch {
+    return { summary: { grossCents: 0, feesCents: 0, netCents: 0, count: 0 }, payments: [] };
   }
 }
 
