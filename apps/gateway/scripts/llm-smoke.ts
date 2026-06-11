@@ -1,0 +1,182 @@
+/**
+ * Real-LLM smoke test: the same pipeline every demo runs deterministically,
+ * but with LITELLM_URL set — department sub-planners, CEO synthesis, the
+ * worker ReAct loop, and CEO chat all hit the live model through LiteLLM's
+ * tier routing. Cost guards: daily_task_cap=1 + conglomerate credit cap 1
+ * (exactly one task dispatches) and WORKER_MAX_STEPS caps the agent loop.
+ *
+ * Assertions are structural (events exist, JSON parsed, chain verifies), not
+ * behavioral — a real model's plans vary. Failures of the *task* are fine
+ * (auto-refund is pipeline behavior); failures of *planning* are not.
+ *
+ * Run with the dev stack up and LiteLLM configured (infra/compose/litellm.config.yaml):
+ *   LITELLM_URL=http://localhost:4000 bun apps/gateway/scripts/llm-smoke.ts
+ */
+import postgres from "postgres";
+import { createGateway } from "../src/app";
+
+const DATABASE_URL = process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp";
+const LITELLM_URL = process.env.LITELLM_URL ?? "http://localhost:4000";
+const API_PORT = 3107;
+const sql = postgres(DATABASE_URL, { max: 4 });
+
+function ok(cond: unknown, msg: string) {
+  if (!cond) throw new Error(`ASSERT FAILED: ${msg}`);
+  console.log(`  ✓ ${msg}`);
+}
+
+const procs: ReturnType<typeof Bun.spawn>[] = [];
+function spawn(label: string, cmd: string[], cwd: string, env: Record<string, string>) {
+  const p = Bun.spawn(cmd, { cwd, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
+  procs.push(p);
+  void (async () => {
+    for await (const chunk of p.stdout) process.stdout.write(`  [${label}] ${new TextDecoder().decode(chunk)}`);
+  })();
+  return p;
+}
+
+async function waitHttp(url: string, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      if ((await fetch(url)).status < 500) return;
+    } catch {
+      /* not up yet */
+    }
+    if (Date.now() > deadline) throw new Error(`timeout waiting for ${url}`);
+    await Bun.sleep(300);
+  }
+}
+
+async function main() {
+  const root = new URL("../../..", import.meta.url).pathname;
+
+  // sanity: LiteLLM reachable before spending anything else
+  const probe = await fetch(`${LITELLM_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mini", max_tokens: 10, messages: [{ role: "user", content: "ping" }] }),
+  });
+  ok(probe.ok, `LiteLLM reachable at ${LITELLM_URL} (model routing works)`);
+
+  // ── provision: cost-guarded company, empty queue ───────────────────────────
+  const slug = `llmsmoke-${Date.now().toString(36)}`;
+  const [cg] = await sql<{ id: string }[]>`
+    INSERT INTO conglomerates (owner_user_id, name, daily_credit_cap)
+    VALUES ('demo-user', 'LLM Smoke Conglomerate', '1') RETURNING id`;
+  const [co] = await sql<{ id: string }[]>`
+    INSERT INTO companies (conglomerate_id, slug, name, mission, status, autonomy_level, daily_task_cap, email_address, subdomain)
+    VALUES (${cg!.id}, ${slug}, 'Mug Works', 'Sell handmade ceramic mugs online.',
+            'active', 'supervised', 1, ${`${slug}@opencorp.app`}, ${`${slug}.localhost`})
+    RETURNING id`;
+  const companyId = co!.id;
+  await sql`INSERT INTO agents (company_id, kind, name, role_prompt, model_tier)
+            VALUES (${companyId}, 'ceo', 'CEO', 'prompts/ceo.md', 'frontier')`;
+  await sql`INSERT INTO credit_entries (conglomerate_id, company_id, delta, reason)
+            VALUES (${cg!.id}, ${companyId}, '5', 'grant')`;
+  console.log(`Provisioned ${slug} (${companyId}) — caps: 1 task/day, 1 credit/day`);
+
+  // ── real services, all pointed at the live model ──────────────────────────
+  const { app, ledger } = createGateway({ databaseUrl: DATABASE_URL });
+  const gw = Bun.serve({ port: 0, fetch: app.fetch });
+  const llmEnv = { LITELLM_URL, WORKER_MAX_STEPS: process.env.WORKER_MAX_STEPS ?? "12" };
+  spawn("worker", ["npx", "tsx", "src/worker.ts"], `${root}workflows`, {
+    DATABASE_URL,
+    GATEWAY_URL: `http://localhost:${gw.port}`,
+    ...llmEnv,
+  });
+  spawn("api", ["bun", "src/index.ts"], `${root}apps/api`, { DATABASE_URL, PORT: String(API_PORT), ...llmEnv });
+  const api = `http://localhost:${API_PORT}`;
+  await waitHttp(`${api}/healthz`);
+  await Bun.sleep(5_000);
+  console.log(`API ${api}, Temporal worker up — model: claude-haiku-4-5 via LiteLLM tiers\n`);
+
+  // ── heartbeat: departments → CEO synthesis → one real worker task ─────────
+  // Fire-and-poll: a real-LLM heartbeat takes minutes, so we don't depend on
+  // one long-lived HTTP request — the daily_brief ledger event is completion.
+  console.log("Running heartbeat (real LLM, this takes a few minutes)...");
+  void fetch(`${api}/companies/${companyId}/heartbeat`, { method: "POST" }).catch(() => {});
+  const deadline = Date.now() + 10 * 60_000;
+  for (;;) {
+    const [done] = await sql`
+      SELECT 1 FROM ledger_events
+      WHERE company_id = ${companyId} AND event_type = 'daily_brief'`;
+    if (done) break;
+    if (Date.now() > deadline) throw new Error("timeout: heartbeat did not post a daily brief in 10 min");
+    await Bun.sleep(3_000);
+  }
+  console.log("Heartbeat completed (daily_brief on the ledger)\n");
+
+  const depts = await sql<{ actor: string; payload: { headline: string; proposedTasks: string[]; degradedToFallback?: string } }[]>`
+    SELECT actor, payload FROM ledger_events
+    WHERE company_id = ${companyId} AND event_type = 'department_plan' ORDER BY seq`;
+  for (const d of depts) {
+    console.log(`  ${d.actor}: "${d.payload.headline}"`);
+    for (const t of d.payload.proposedTasks) console.log(`    → proposed: ${t}`);
+    if (d.payload.degradedToFallback) console.log(`    ⚠ degraded to fallback: ${d.payload.degradedToFallback}`);
+  }
+  ok(depts.length === 3, "all three departments planned");
+  ok(
+    depts.every((d) => !d.payload.degradedToFallback),
+    "no department degraded to fallback — real LLM JSON passed schema validation",
+  );
+
+  const [plan] = await sql<{ payload: { createdTasks: string[]; departments: Record<string, { headline: string }> } }[]>`
+    SELECT payload FROM ledger_events
+    WHERE company_id = ${companyId} AND event_type = 'ceo_plan' ORDER BY seq DESC LIMIT 1`;
+  ok(plan, "CEO synthesis produced a valid plan (schema-validated JSON from the live model)");
+  console.log(`  CEO created tasks: ${plan!.payload.createdTasks.join(" · ") || "(none)"}`);
+
+  const [brief] = await sql<{ payload: { brief: string } }[]>`
+    SELECT payload FROM ledger_events
+    WHERE company_id = ${companyId} AND event_type = 'daily_brief' ORDER BY seq DESC LIMIT 1`;
+  ok(brief && brief.payload.brief.length > 0, "daily brief posted");
+  console.log(`\n  Daily brief: ${brief!.payload.brief}\n`);
+
+  const tasks = await sql<{ title: string; status: string; result_summary: string | null; error: string | null }[]>`
+    SELECT title, status, result_summary, error FROM tasks WHERE company_id = ${companyId}`;
+  for (const t of tasks) {
+    console.log(`  Task [${t.status}] ${t.title}`);
+    if (t.result_summary) console.log(`    result: ${t.result_summary.slice(0, 300)}`);
+    if (t.error) console.log(`    error: ${t.error.slice(0, 300)}`);
+  }
+  const settled = tasks.filter((t) => t.status === "done" || t.status === "failed");
+  if (settled.length >= 1) {
+    ok(true, `dispatched task settled (${settled[0]!.status}) through the real worker ReAct loop`);
+    const toolCalls = await sql<{ n: string }[]>`
+      SELECT count(*) AS n FROM ledger_events
+      WHERE company_id = ${companyId} AND event_type = 'tool_call'`;
+    console.log(`  Worker made ${toolCalls[0]!.n} audited tool call(s) through the gateway\n`);
+  } else {
+    console.log("  (CEO queued no immediately-dispatchable work — valid plan, nothing to run)\n");
+  }
+
+  // ── chat with the real CEO ─────────────────────────────────────────────────
+  console.log('Chatting with the CEO: "What should we focus on this week, and why?"');
+  const chat = (await (
+    await fetch(`${api}/companies/${companyId}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "What should we focus on this week, and why?" }),
+    })
+  ).json()) as { reply: string; createdTasks: string[] };
+  console.log(`\n  CEO: ${chat.reply}\n`);
+  ok(chat.reply.length > 0 && !chat.reply.includes("no LLM configured"), "chat reply came from the live model");
+
+  // ── transparency holds under a real model ──────────────────────────────────
+  const head = (await ledger.head())!.seq;
+  const verdict = await ledger.verify(1, head);
+  ok(verdict.ok, `hash chain verifies (head seq ${head})`);
+
+  console.log("\nReal-LLM smoke test PASSED");
+}
+
+main()
+  .catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    for (const p of procs) p.kill();
+    setTimeout(() => process.exit(process.exitCode ?? 0), 500);
+  });

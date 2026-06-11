@@ -2,11 +2,11 @@
 model_list:
   - model_name: frontier
     litellm_params:
-      model: anthropic/claude-fable-5
+      model: anthropic/claude-haiku-4-5-20251001
       api_key: os.environ/ANTHROPIC_API_KEY
   - model_name: standard
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
+      model: anthropic/claude-haiku-4-5-20251001
       api_key: os.environ/ANTHROPIC_API_KEY
   - model_name: mini
     litellm_params:
