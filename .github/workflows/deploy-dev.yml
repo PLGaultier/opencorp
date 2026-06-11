@@ -6,6 +6,7 @@
 name: Deploy dev → Vercel preview
 
 on:
+  workflow_dispatch:
   push:
     branches: [dev]
     paths:
