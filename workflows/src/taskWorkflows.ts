@@ -28,7 +28,11 @@ export async function TaskRun(input: { taskId: string }): Promise<{ summary: str
     await act.setTaskState(input.taskId, "done", { resultSummary: summary });
     return { summary };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // Temporal wraps the activity error ("Activity task failed"); the ledger
+    // and the CEO should see the root cause (e.g. step_budget_exceeded)
+    let cause: unknown = err;
+    while (cause instanceof Error && cause.cause instanceof Error) cause = cause.cause;
+    const message = cause instanceof Error ? cause.message : String(cause);
     await act.refundTask(input.taskId);
     await act.setTaskState(input.taskId, "failed", { error: message });
     throw ApplicationFailure.nonRetryable(`task failed (refunded): ${message}`);
@@ -39,8 +43,18 @@ export async function CompanyHeartbeat(input: { companyId: string }): Promise<{
   dispatched: number;
   stoppedBecause: string;
 }> {
-  // M2: dispatch-only heartbeat. The CEO planning step (LLM guided JSON,
-  // §5.2 steps 1–3) lands with the chat surface in M3.
+  // §5.2 steps 1–3: the CEO gathers context, plans, creates tasks, maybe
+  // patches the mission. Planning failure must not block dispatch of work
+  // that's already queued.
+  let brief = "";
+  try {
+    const plan = await act.runCeoPlanning(input.companyId);
+    brief = plan.userBrief;
+  } catch (err) {
+    brief = `CEO planning failed: ${err instanceof Error ? err.message : String(err)}.`;
+  }
+
+  // step 4: serialized dispatch under cap semantics
   let dispatched = 0;
   let reason = "ok";
   for (;;) {
@@ -59,9 +73,11 @@ export async function CompanyHeartbeat(input: { companyId: string }): Promise<{
     }
     dispatched++;
   }
+
+  // step 5: daily brief to the owner
   await act.postDailyBrief(
     input.companyId,
-    `Heartbeat: dispatched ${dispatched} task(s); stopped because: ${reason}.`,
+    `${brief} Dispatched ${dispatched} task(s); stopped because: ${reason}.`,
   );
   return { dispatched, stoppedBecause: reason };
 }
