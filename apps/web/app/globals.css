@@ -211,6 +211,16 @@ a.task:hover { border-color: var(--accent); }
 .detail-block.error { border-color: var(--red); }
 .detail-block.error p { color: var(--red); }
 
+/* Plans grid (credits page) */
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+.plan-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 1.1rem 1.25rem; display: flex; flex-direction: column; gap: 0.2rem;
+}
+.plan-card.active { border-color: var(--accent); }
+.plan-name { font-size: 0.9rem; font-weight: 600; }
+.plan-price { font-size: 1.3rem; font-variant-numeric: tabular-nums; font-weight: 700; }
+
 /* Product catalogue */
 .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
 .product-card {

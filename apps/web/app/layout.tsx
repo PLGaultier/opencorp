@@ -31,6 +31,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <a href="https://github.com/PLGaultier/opencorp" className="link">
               GitHub
             </a>
+            <Link href="/credits" className="link">
+              Credits
+            </Link>
             <AuthStatus />
             <span className="badge">{isDemo ? "demo data · preview" : "live"}</span>
           </nav>

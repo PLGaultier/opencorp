@@ -619,6 +619,47 @@ app.post("/companies/:id/withdraw", requireAuth, requireCompanyAccess, async (c)
   }
 });
 
+// Credit dashboard — balance, breakdown by reason, recent entries, current plan.
+app.get("/api/conglomerates/:id/credits", requireAuth, async (c) => {
+  const conglomerateId = c.req.param("id");
+  if (!(await userIsMemberOfConglomerate(sql, c.get("userId"), conglomerateId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  const [balance] = await sql<{ balance: string }[]>`
+    SELECT COALESCE(SUM(delta), 0) AS balance
+    FROM credit_entries WHERE conglomerate_id = ${conglomerateId}`;
+  const breakdown = await sql<{ reason: string; total: string }[]>`
+    SELECT reason, COALESCE(SUM(delta), 0) AS total
+    FROM credit_entries WHERE conglomerate_id = ${conglomerateId}
+    GROUP BY reason`;
+  const entries = await sql<
+    { id: string; delta: string; reason: string; company_id: string | null; company_name: string | null; task_id: string | null; created_at: string }[]
+  >`SELECT ce.id, ce.delta, ce.reason, ce.company_id, co.name AS company_name, ce.task_id, ce.created_at
+    FROM credit_entries ce LEFT JOIN companies co ON co.id = ce.company_id
+    WHERE ce.conglomerate_id = ${conglomerateId}
+    ORDER BY ce.created_at DESC LIMIT 100`;
+  const [sub] = await sql<{ plan: string; status: string; current_period_start: Date | null }[]>`
+    SELECT plan, status, current_period_start FROM subscriptions
+    WHERE conglomerate_id = ${conglomerateId} AND status = 'active' LIMIT 1`;
+  return c.json({
+    conglomerateId,
+    balance: Number(balance?.balance ?? 0),
+    breakdown: Object.fromEntries(breakdown.map((r) => [r.reason, Number(r.total)])),
+    subscription: sub
+      ? { plan: sub.plan, status: sub.status, currentPeriodStart: sub.current_period_start }
+      : null,
+    entries: entries.map((e) => ({
+      id: e.id,
+      delta: Number(e.delta),
+      reason: e.reason,
+      companyId: e.company_id,
+      companyName: e.company_name,
+      taskId: e.task_id,
+      createdAt: e.created_at,
+    })),
+  });
+});
+
 // §10 — billing plans. Lago (when configured) mirrors subscriptions for
 // invoicing; the credit ledger is always the source of truth.
 const billingStore = new PgBillingStore(sql);

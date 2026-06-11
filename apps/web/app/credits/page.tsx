@@ -1,0 +1,314 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { API_URL } from "@/lib/data";
+import { useSession } from "@/lib/auth-client";
+
+interface CreditEntry {
+  id: string;
+  delta: number;
+  reason: string;
+  companyId: string | null;
+  companyName: string | null;
+  taskId: string | null;
+  createdAt: string;
+}
+
+interface CreditData {
+  conglomerateId: string;
+  balance: number;
+  breakdown: Record<string, number>;
+  subscription: { plan: string; status: string; currentPeriodStart: string | null } | null;
+  entries: CreditEntry[];
+}
+
+interface Plan {
+  id: string;
+  name: string;
+  priceCents: number;
+  credits: number;
+  oneTime: boolean;
+}
+
+const REASON_LABELS: Record<string, string> = {
+  grant: "Granted",
+  task_charge: "Task charges",
+  task_refund: "Task refunds",
+  referral: "Referral bonus",
+  adjustment: "Adjustments",
+};
+
+const dt = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+
+const eur = (cents: number) => `€${(cents / 100).toFixed(2)}`;
+
+export default function CreditsPage() {
+  const { data: session, isPending } = useSession();
+  const [data, setData] = useState<CreditData | null>(null);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [subscribing, setSubscribing] = useState<string | null>(null);
+  const [subError, setSubError] = useState<string | null>(null);
+  const [subDone, setSubDone] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!API_URL || isPending || !session) { setLoading(false); return; }
+    const load = async () => {
+      try {
+        // get conglomerate id from /api/me then fetch credits
+        const me = await fetch(`${API_URL}/api/me`, { credentials: "include" });
+        if (!me.ok) { setLoading(false); return; }
+        const { conglomerateIds } = (await me.json()) as { conglomerateIds: string[] };
+        const conglomerateId = conglomerateIds[0];
+        if (!conglomerateId) { setLoading(false); return; }
+
+        const [credRes, planRes] = await Promise.all([
+          fetch(`${API_URL}/api/conglomerates/${conglomerateId}/credits`, { credentials: "include" }),
+          fetch(`${API_URL}/api/plans`),
+        ]);
+        if (credRes.ok) setData(await credRes.json() as CreditData);
+        if (planRes.ok) {
+          const { plans: p } = (await planRes.json()) as { plans: Plan[] };
+          setPlans(p);
+        }
+      } catch { /* network error — show empty state */ }
+      setLoading(false);
+    };
+    void load();
+  }, [session, isPending]);
+
+  const subscribeTo = async (planId: string) => {
+    if (!data) return;
+    setSubscribing(planId);
+    setSubError(null);
+    try {
+      const res = await fetch(`${API_URL}/conglomerates/${data.conglomerateId}/subscribe`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ plan: planId }),
+      });
+      if (!res.ok) {
+        const d = (await res.json()) as { error?: string };
+        setSubError(d.error ?? "subscription failed");
+      } else {
+        setSubDone(planId);
+        // reload credit data
+        const credRes = await fetch(`${API_URL}/api/conglomerates/${data.conglomerateId}/credits`, { credentials: "include" });
+        if (credRes.ok) setData(await credRes.json() as CreditData);
+      }
+    } catch {
+      setSubError("API unreachable");
+    }
+    setSubscribing(null);
+  };
+
+  // ── Demo / unauthenticated states ──────────────────────────────────────────
+
+  if (!API_URL) {
+    return (
+      <main>
+        <h1>Credits</h1>
+        <p className="sub">Demo preview — connect the dashboard to an API to see your credit balance.</p>
+        <DemoCreditView />
+      </main>
+    );
+  }
+
+  if (!isPending && !session) {
+    return (
+      <main>
+        <h1>Credits</h1>
+        <p className="sub">
+          Your credit balance and usage are only visible when signed in —{" "}
+          <a href="/login" style={{ textDecoration: "underline" }}>sign in</a>.
+        </p>
+      </main>
+    );
+  }
+
+  if (loading || isPending) {
+    return (
+      <main>
+        <h1>Credits</h1>
+        <p className="sub">Loading…</p>
+      </main>
+    );
+  }
+
+  if (!data) {
+    return (
+      <main>
+        <h1>Credits</h1>
+        <p className="sub">No conglomerate found. <a href="/new" style={{ textDecoration: "underline" }}>Found your first company</a> to create one.</p>
+      </main>
+    );
+  }
+
+  const currentPlan = data.subscription?.plan ?? "free";
+  const charged = Math.abs(data.breakdown["task_charge"] ?? 0);
+  const refunded = data.breakdown["task_refund"] ?? 0;
+  const granted = (data.breakdown["grant"] ?? 0) + (data.breakdown["referral"] ?? 0) + Math.max(0, data.breakdown["adjustment"] ?? 0);
+
+  return (
+    <main>
+      <h1>Credits</h1>
+      <p className="sub">Your conglomerate credit balance — every grant and charge is on the ledger.</p>
+
+      {/* Balance + breakdown */}
+      <div className="pnl">
+        <div>
+          <span>Balance</span>
+          <b className={data.balance > 0 ? "pos" : ""}>{data.balance.toFixed(2)}</b>
+        </div>
+        <div>
+          <span>Total granted</span>
+          <b>{granted.toFixed(2)}</b>
+        </div>
+        <div>
+          <span>Task charges</span>
+          <b>{charged.toFixed(2)}</b>
+        </div>
+        <div>
+          <span>Refunds</span>
+          <b className="pos">{refunded.toFixed(2)}</b>
+        </div>
+        <div>
+          <span>Plan</span>
+          <b style={{ textTransform: "capitalize" }}>{currentPlan}</b>
+        </div>
+      </div>
+
+      {/* Plans */}
+      {plans.length > 0 && (
+        <section style={{ marginTop: "2rem" }}>
+          <h2 style={{ fontSize: "1.05rem" }}>Plans</h2>
+          <div className="plan-grid">
+            {plans.map((p) => {
+              const active = p.id === currentPlan;
+              const done = subDone === p.id;
+              return (
+                <div key={p.id} className={`plan-card ${active ? "active" : ""}`}>
+                  <span className="plan-name">{p.name}</span>
+                  <span className="plan-price">
+                    {p.priceCents === 0 ? "Free" : `${eur(p.priceCents)}${p.oneTime ? "" : "/mo"}`}
+                  </span>
+                  <span className="sub" style={{ margin: 0 }}>
+                    {p.credits} credits{p.oneTime ? " (one-time)" : "/month"}
+                  </span>
+                  {active ? (
+                    <span className="saved" style={{ marginTop: "0.5rem" }}>Current plan ✓</span>
+                  ) : (
+                    <button
+                      className="btn primary"
+                      style={{ marginTop: "0.75rem", alignSelf: "flex-start" }}
+                      onClick={() => subscribeTo(p.id)}
+                      disabled={!!subscribing || done}
+                    >
+                      {subscribing === p.id ? "…" : done ? "Subscribed ✓" : p.priceCents === 0 ? "Switch to free" : `Subscribe`}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {subError && <p className="auth-error" style={{ marginTop: "0.75rem" }}>{subError}</p>}
+        </section>
+      )}
+
+      {/* Credit entry log */}
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Credit log</h2>
+        {data.entries.length === 0 && <p className="sub">No credit activity yet.</p>}
+        {data.entries.length > 0 && (
+          <table className="board">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Reason</th>
+                <th>Company</th>
+                <th className="num">Delta</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.entries.map((e) => (
+                <tr key={e.id}>
+                  <td style={{ color: "var(--muted)", fontSize: "0.82rem" }}>{dt(e.createdAt)}</td>
+                  <td>{REASON_LABELS[e.reason] ?? e.reason}</td>
+                  <td>
+                    {e.companyName ? (
+                      <Link href={`/c/${e.companyId}`} style={{ textDecoration: "underline" }}>
+                        {e.companyName}
+                      </Link>
+                    ) : (
+                      <span className="sub" style={{ margin: 0 }}>—</span>
+                    )}
+                  </td>
+                  <td className={`num ${e.delta >= 0 ? "pos" : ""}`} style={e.delta < 0 ? { color: "var(--red)" } : {}}>
+                    {e.delta >= 0 ? "+" : ""}{e.delta.toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </main>
+  );
+}
+
+/** Shown in demo mode — illustrates the shape of the page without real data. */
+function DemoCreditView() {
+  const demoEntries = [
+    { id: "1", delta: 10, reason: "grant", companyName: null, createdAt: new Date(Date.now() - 3600_000 * 24 * 7).toISOString() },
+    { id: "2", delta: -1, reason: "task_charge", companyName: "Sell Handmade Ceramic", createdAt: new Date(Date.now() - 3600_000 * 5).toISOString() },
+    { id: "3", delta: 0, reason: "task_refund", companyName: "A Newsletter About", createdAt: new Date(Date.now() - 3600_000 * 2).toISOString() },
+  ];
+  return (
+    <>
+      <div className="pnl">
+        <div><span>Balance</span><b className="pos">9.00</b></div>
+        <div><span>Total granted</span><b>10.00</b></div>
+        <div><span>Task charges</span><b>1.00</b></div>
+        <div><span>Plan</span><b>Free</b></div>
+      </div>
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Plans</h2>
+        <div className="plan-grid">
+          {[
+            { name: "Free", price: "Free", credits: "10 credits (one-time)", active: true },
+            { name: "Builder", price: "€29/mo", credits: "100 credits/month", active: false },
+            { name: "Pro", price: "€99/mo", credits: "500 credits/month", active: false },
+          ].map((p) => (
+            <div key={p.name} className={`plan-card ${p.active ? "active" : ""}`}>
+              <span className="plan-name">{p.name}</span>
+              <span className="plan-price">{p.price}</span>
+              <span className="sub" style={{ margin: 0 }}>{p.credits}</span>
+              {p.active ? <span className="saved" style={{ marginTop: "0.5rem" }}>Current plan ✓</span> : <button className="btn primary" style={{ marginTop: "0.75rem" }} disabled>Subscribe</button>}
+            </div>
+          ))}
+        </div>
+      </section>
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Credit log</h2>
+        <table className="board">
+          <thead><tr><th>Date</th><th>Reason</th><th>Company</th><th className="num">Delta</th></tr></thead>
+          <tbody>
+            {demoEntries.map((e) => (
+              <tr key={e.id}>
+                <td style={{ color: "var(--muted)", fontSize: "0.82rem" }}>{new Date(e.createdAt).toLocaleString()}</td>
+                <td>{REASON_LABELS[e.reason]}</td>
+                <td>{e.companyName ?? <span className="sub" style={{ margin: 0 }}>—</span>}</td>
+                <td className={`num ${e.delta >= 0 ? "pos" : ""}`} style={e.delta < 0 ? { color: "var(--red)" } : {}}>{e.delta >= 0 ? "+" : ""}{e.delta.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </>
+  );
+}
