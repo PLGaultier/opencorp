@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { extractCompanySpec, llmConfigFromEnv, type CompanySpec } from "@opencorp/llm";
 import { Ledger, PgStore, type LedgerEventInput } from "@opencorp/ledgerd";
+import { ensureHeartbeatSchedule } from "./schedule";
 
 /**
  * CreateCompany activities. All idempotent:
@@ -133,4 +134,18 @@ export async function seedTasks(input: { companyId: string; spec: CompanySpec })
 
 export async function appendLedger(input: LedgerEventInput): Promise<void> {
   await ledger.append(input);
+}
+
+/** §6 step 4 — schedule the company's daily autonomous heartbeat (§1 feature 5). */
+export async function scheduleHeartbeat(companyId: string): Promise<{ scheduleId: string }> {
+  const { scheduleId, created } = await ensureHeartbeatSchedule(companyId);
+  if (created) {
+    await ledger.append({
+      companyId,
+      actor: "system",
+      eventType: "heartbeat_scheduled",
+      payload: { scheduleId, cron: process.env.HEARTBEAT_CRON ?? "0 7 * * *" },
+    });
+  }
+  return { scheduleId };
 }

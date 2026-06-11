@@ -17,6 +17,7 @@
     "@opencorp/mcp-client": "workspace:*"
   },
   "devDependencies": {
-    "@opencorp/agentd": "workspace:*"
+    "@opencorp/agentd": "workspace:*",
+    "@opencorp/workflows": "workspace:*"
   }
 }

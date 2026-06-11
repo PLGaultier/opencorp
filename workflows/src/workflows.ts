@@ -48,8 +48,9 @@ export async function CreateCompany(input: CreateCompanyInput): Promise<CreateCo
   // 4. fast-path first deploy (no agent)
   const { url } = await act.deployLanding({ companyId, spec, umamiSiteId });
 
-  // 5. seed tasks + ledger event
+  // 5. seed tasks + schedule the daily heartbeat (§6 step 4) + ledger event
   await act.seedTasks({ companyId, spec });
+  await act.scheduleHeartbeat(companyId);
   await act.appendLedger({
     companyId,
     actor: "system",

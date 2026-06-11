@@ -14,6 +14,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@opencorp/ledgerd": "workspace:*",
+        "@opencorp/llm": "workspace:*",
         "@opencorp/schema": "workspace:*",
         "@opencorp/workflows": "workspace:*",
         "hono": "^4.6.0",
@@ -33,6 +34,7 @@
       },
       "devDependencies": {
         "@opencorp/agentd": "workspace:*",
+        "@opencorp/workflows": "workspace:*",
       },
     },
     "apps/web": {
