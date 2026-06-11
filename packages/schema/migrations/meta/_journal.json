@@ -22,6 +22,13 @@
       "when": 1781162242664,
       "tag": "0002_slim_leech",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781201807735,
+      "tag": "0003_eager_sentinel",
+      "breakpoints": true
     }
   ]
 }

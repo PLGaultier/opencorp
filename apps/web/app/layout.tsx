@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { isDemo } from "@/lib/data";
+import { AuthStatus } from "./auth-status";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -27,6 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <a href="https://github.com" className="link">
               GitHub
             </a>
+            <AuthStatus />
             <span className="badge">{isDemo ? "demo data · preview" : "live"}</span>
           </nav>
           {children}

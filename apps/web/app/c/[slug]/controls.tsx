@@ -30,9 +30,18 @@ export function CompanyControls({
   const [chat, setChat] = useState<{ role: "owner" | "ceo"; text: string }[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [needsAuth, setNeedsAuth] = useState(false);
 
+  // owner actions require a session (cookie on the API origin)
   const api = useCallback(
-    (path: string, init?: RequestInit) => fetch(`${API_URL}/companies/${companyId}${path}`, init),
+    async (path: string, init?: RequestInit) => {
+      const res = await fetch(`${API_URL}/companies/${companyId}${path}`, {
+        ...init,
+        credentials: "include",
+      });
+      if (res.status === 401 || res.status === 403) setNeedsAuth(true);
+      return res;
+    },
     [companyId],
   );
 
@@ -111,6 +120,20 @@ export function CompanyControls({
       <div className="controls">
         <span className="sub" style={{ margin: 0 }}>
           Owner controls (run / pause / chat) are available when the dashboard is connected to an API.
+        </span>
+      </div>
+    );
+  }
+
+  if (needsAuth) {
+    return (
+      <div className="controls">
+        <span className="sub" style={{ margin: 0 }}>
+          Owner controls are limited to this company&apos;s conglomerate members —{" "}
+          <a href="/login" style={{ textDecoration: "underline" }}>
+            sign in
+          </a>
+          . The ledger and live feed below stay public.
         </span>
       </div>
     );

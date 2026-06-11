@@ -1,0 +1,54 @@
+# Preview deploy of the dashboard (apps/web) on every push to dev.
+# Production (master) deploys are untouched. Required repo secrets:
+#   VERCEL_TOKEN       — vercel.com/account/tokens
+#   VERCEL_ORG_ID      — team id (from apps/web/.vercel/project.json)
+#   VERCEL_PROJECT_ID  — project id (same file)
+name: Deploy dev → Vercel preview
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "apps/web/**"
+      - ".github/workflows/deploy-dev.yml"
+
+concurrency:
+  group: vercel-dev
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Pull Vercel environment (preview)
+        run: vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build
+        run: vercel build --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy preview
+        id: deploy
+        run: |
+          URL=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "### Preview deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "$URL" >> "$GITHUB_STEP_SUMMARY"
+
+      # stable URL for the dev branch on top of the per-commit one
+      - name: Alias opencorp-dev.vercel.app
+        run: vercel alias set ${{ steps.deploy.outputs.url }} opencorp-dev.vercel.app --token=${{ secrets.VERCEL_TOKEN }}

@@ -7,6 +7,7 @@ cent earned lands on a public, hash-chained ledger.
 Full spec: [OPENCORP_SPEC.md](./OPENCORP_SPEC.md). Current milestone: **M5 — Frontier (in progress)**:
 - **Multi-agent departments** — every heartbeat, CMO/CTO/CFO sub-planners (`prompts/dept_*.md`) review the company through their own lens and publish `department_plan` proposals to the ledger; the CEO synthesizes them into the final plan.
 - **Autonomous heartbeats** — every company gets a per-company Temporal Schedule (daily cron, `HEARTBEAT_CRON`) created at provisioning; pause/resume are owner-only API controls (`POST /companies/:id/pause|resume`), and `POST /admin/schedules/backfill` migrates pre-existing companies. Companies now run with zero human involvement — the §16 "daily autonomous task runs" requirement.
+- **Auth** — Better Auth (email + password, §3) mounted at `/api/auth/*`; signing up creates the user's conglomerate with an owner membership. Owner/money endpoints (create company, heartbeat, pause/resume, chat, run task, withdraw, subscribe) require a session + conglomerate membership; transparency surfaces (`/api/companies`, `/api/ledger*`, `/api/live`) stay public by design (§9.2). Dashboard gets `/login` + a session badge. Dev: `OPENCORP_AUTH_DISABLED=1` bypasses auth for demo scripts.
 
 ## Layout
 

@@ -21,6 +21,13 @@ import {
   startWithdrawal,
 } from "@opencorp/workflows";
 import { PLANS, PgBillingStore, billingProviderFromEnv, runGrantCycle, subscribe } from "./billing";
+import {
+  auth,
+  requireAuth,
+  userCanAccessCompany,
+  userConglomerateIds,
+  userIsMemberOfConglomerate,
+} from "./auth";
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp";
@@ -28,13 +35,33 @@ const store = new PgStore(databaseUrl);
 const ledger = new Ledger(store);
 const sql = postgres(databaseUrl, { max: 5 });
 
-const app = new Hono();
+const app = new Hono<{ Variables: { userId: string } }>();
 
-// Public transparency API + dashboard controls are called from the browser on
-// another origin (Next.js dev server, Vercel). Auth lands in a later milestone.
-app.use("*", cors());
+// Public transparency API + dashboard are called from the browser on another
+// origin (Next.js dev server, Vercel). Session cookies need credentials, so
+// the origin is echoed back rather than wildcarded.
+app.use("*", cors({ origin: (origin) => origin || "*", credentials: true }));
+
+// §3 — Better Auth: sign-up/sign-in/sign-out/session under /api/auth/*
+app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
 app.get("/healthz", (c) => c.json({ ok: true, service: "opencorp-api" }));
+
+// Who am I + which conglomerates I belong to (drives the dashboard).
+app.get("/api/me", requireAuth, async (c) => {
+  const userId = c.get("userId");
+  const conglomerateIds = await userConglomerateIds(sql, userId);
+  return c.json({ userId, conglomerateIds });
+});
+
+/** 403 unless the session user is a member of the company's conglomerate. */
+const requireCompanyAccess: typeof requireAuth = async (c, next) => {
+  const companyId = c.req.param("id");
+  if (!companyId || !(await userCanAccessCompany(sql, c.get("userId"), companyId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  await next();
+};
 
 // §9.2/§9.4 — public company list with a real P&L: revenue in, credits spent,
 // money withdrawn, current balance. Public companies only (is_public, §4).
@@ -114,30 +141,35 @@ app.get("/api/companies/:slug/events", async (c) => {
   });
 });
 
-// §6 — one prompt → company. Auth lands in a later milestone; conglomerateId
-// is taken from the body for now.
-app.post("/companies", async (c) => {
+// §6 — one prompt → company, in the session user's conglomerate. A user with
+// several conglomerates may pick one explicitly; it must be theirs.
+app.post("/companies", requireAuth, async (c) => {
   const body = z
-    .object({ conglomerateId: z.string().uuid(), prompt: z.string().min(10).max(2000) })
+    .object({ conglomerateId: z.string().uuid().optional(), prompt: z.string().min(10).max(2000) })
     .safeParse(await c.req.json());
   if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
-  const result = await startCreateCompany(body.data);
+  const mine = await userConglomerateIds(sql, c.get("userId"));
+  const conglomerateId = body.data.conglomerateId ?? mine[0];
+  if (!conglomerateId || !mine.includes(conglomerateId)) {
+    return c.json({ error: "forbidden", detail: "not a member of that conglomerate" }, 403);
+  }
+  const result = await startCreateCompany({ conglomerateId, prompt: body.data.prompt });
   return c.json(result, 201);
 });
 
 // §5.2 — manual heartbeat / Run-now controls (dashboard actions, never LLM tools)
-app.post("/companies/:id/heartbeat", async (c) =>
+app.post("/companies/:id/heartbeat", requireAuth, requireCompanyAccess, async (c) =>
   c.json(await startHeartbeat(c.req.param("id"))),
 );
 
 // §1 feature 5 / §5.2 — the autonomous clock: per-company Temporal cron
 // schedule. Pause/resume are owner controls; the CEO cannot reach them.
-app.get("/companies/:id/schedule", async (c) => {
+app.get("/companies/:id/schedule", requireAuth, requireCompanyAccess, async (c) => {
   const info = await describeHeartbeatSchedule(c.req.param("id"));
   return info ? c.json(info) : c.json({ error: "not_scheduled" }, 404);
 });
 
-app.post("/companies/:id/schedule", async (c) => {
+app.post("/companies/:id/schedule", requireAuth, requireCompanyAccess, async (c) => {
   const companyId = c.req.param("id");
   const [co] = await sql<{ id: string }[]>`SELECT id FROM companies WHERE id = ${companyId}`;
   if (!co) return c.json({ error: "not_found" }, 404);
@@ -153,7 +185,7 @@ app.post("/companies/:id/schedule", async (c) => {
   return c.json({ scheduleId, created });
 });
 
-app.post("/companies/:id/pause", async (c) => {
+app.post("/companies/:id/pause", requireAuth, requireCompanyAccess, async (c) => {
   const companyId = c.req.param("id");
   const [co] = await sql<{ id: string }[]>`
     UPDATE companies SET status = 'paused' WHERE id = ${companyId} RETURNING id`;
@@ -172,7 +204,7 @@ app.post("/companies/:id/pause", async (c) => {
   return c.json({ status: "paused" });
 });
 
-app.post("/companies/:id/resume", async (c) => {
+app.post("/companies/:id/resume", requireAuth, requireCompanyAccess, async (c) => {
   const companyId = c.req.param("id");
   const [co] = await sql<{ id: string }[]>`
     UPDATE companies SET status = 'active' WHERE id = ${companyId} RETURNING id`;
@@ -192,7 +224,7 @@ app.post("/companies/:id/resume", async (c) => {
 });
 
 // One-time migration: give every pre-scheduling company its daily clock.
-app.post("/admin/schedules/backfill", async (c) => {
+app.post("/admin/schedules/backfill", requireAuth, async (c) => {
   const results = await backfillHeartbeatSchedules(sql);
   for (const r of results.filter((r) => r.created)) {
     await ledger.append({
@@ -204,7 +236,13 @@ app.post("/admin/schedules/backfill", async (c) => {
   }
   return c.json({ scheduled: results.filter((r) => r.created).length, total: results.length });
 });
-app.post("/tasks/:id/run", async (c) => {
+app.post("/tasks/:id/run", requireAuth, async (c) => {
+  const [task] = await sql<{ company_id: string }[]>`
+    SELECT company_id FROM tasks WHERE id = ${c.req.param("id")}`;
+  if (!task) return c.json({ error: "not_found" }, 404);
+  if (!(await userCanAccessCompany(sql, c.get("userId"), task.company_id))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
   try {
     return c.json(await startTaskRun(c.req.param("id")));
   } catch (err) {
@@ -215,7 +253,7 @@ app.post("/tasks/:id/run", async (c) => {
 // §1 feature 2 — chat with the CEO. Free (never charges credits); the CEO can
 // queue tasks and patch the mission, never pause the company or change caps.
 // The conversation itself is a ledger event — transparency includes the boss.
-app.post("/companies/:id/chat", async (c) => {
+app.post("/companies/:id/chat", requireAuth, requireCompanyAccess, async (c) => {
   const body = z
     .object({ message: z.string().min(1).max(8000) })
     .safeParse(await c.req.json());
@@ -277,7 +315,7 @@ app.post("/companies/:id/chat", async (c) => {
 });
 
 // §10 — money-out. User-initiated (the §7.3 human approval); durable workflow.
-app.post("/companies/:id/withdraw", async (c) => {
+app.post("/companies/:id/withdraw", requireAuth, requireCompanyAccess, async (c) => {
   const body = z
     .object({ amountCents: z.number().int().positive(), currency: z.string().length(3).optional() })
     .safeParse(await c.req.json());
@@ -300,11 +338,14 @@ app.get("/api/plans", (c) =>
   c.json({ plans: Object.values(PLANS), provider: billingProvider.kind }),
 );
 
-app.post("/conglomerates/:id/subscribe", async (c) => {
+app.post("/conglomerates/:id/subscribe", requireAuth, async (c) => {
   const body = z
     .object({ plan: z.enum(["free", "builder", "pro"]) })
     .safeParse(await c.req.json());
   if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  if (!(await userIsMemberOfConglomerate(sql, c.get("userId"), c.req.param("id")))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
   try {
     const sub = await subscribe(billingStore, billingProvider, appendGrant, c.req.param("id"), body.data.plan);
     return c.json({ subscription: sub });
