@@ -10,12 +10,24 @@ rebuilding.
 ## Build the template
 
 ```sh
-npm i -g @e2b/cli       # once
-e2b auth login          # once
-e2b template build --name opencorp-agentd --dockerfile infra/e2b/e2b.Dockerfile
+bunx @e2b/cli auth login                            # once
+bun services/sandboxd/scripts/build-template.ts     # builds in E2B's cloud (no local Docker)
 ```
 
-Rebuild only when system dependencies change (Bun version, apt packages).
+The script uses the v2 Template SDK (`Template.build` over this Dockerfile);
+the CLI's `template build` v1 path is deprecated and silently no-ops. Rebuild
+only when system dependencies change (Bun version, apt packages).
+
+## Smoke test
+
+```sh
+bun services/sandboxd/scripts/smoke-e2b.ts opencorp-agentd
+```
+
+Runs the pool's exact data path against a real sandbox: real agentd bundle,
+spec via stdin redirect, NDJSON events back — against a fake MCP gateway
+started *inside* the sandbox, so no public gateway/tunnel is needed. Without
+the argument it falls back to the `base` template and installs Bun at runtime.
 
 ## Runtime configuration
 
