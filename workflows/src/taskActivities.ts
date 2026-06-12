@@ -1,9 +1,9 @@
 import postgres from "postgres";
 import { heartbeat } from "@temporalio/activity";
 import { signToken } from "@opencorp/mcp-client";
-import { runWorkerTask } from "@opencorp/agentd";
 import { Ledger, PgStore } from "@opencorp/ledgerd";
-import { LocalSandboxPool } from "@opencorp/sandboxd";
+import { createSandboxPool } from "@opencorp/sandboxd";
+import { syncInboxFromEnv } from "@opencorp/stalwart";
 import {
   DEPARTMENT_KEYS,
   fallbackDepartment,
@@ -31,10 +31,12 @@ const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3004";
 const sql = postgres(DATABASE_URL, { max: 5 });
 const ledger = new Ledger(new PgStore(DATABASE_URL));
 
-// Execution-plane pool (§8). Local in-process today; swap for the Firecracker
-// pool on bare metal without touching the agent loop. One sandbox per task,
+// Execution-plane pool (§8), selected by SANDBOX_KIND: `local` (in-process,
+// dev/tests), `subprocess` (separate OS process — real isolation, the prod
+// default off bare metal), or `firecracker` (snapshot-restored microVMs on
+// KVM). The agent loop is identical across all three. One sandbox per task,
 // never reused (§5.3).
-const sandboxes = new LocalSandboxPool(Number(process.env.SANDBOX_CAPACITY ?? 64));
+const sandboxes = createSandboxPool();
 
 export interface TaskRow {
   id: string;
@@ -142,33 +144,34 @@ export async function runWorker(taskId: string): Promise<{ summary: string; step
   await sql`UPDATE tasks SET trace_id = ${taskId} WHERE id = ${taskId}`;
   const sandbox = await sandboxes.claim({ taskId, companyId: t.company_id, budgets });
   try {
-    return await sandbox.run(() =>
-      runWorkerTask({
+    return await sandbox.execAgent(
+      {
         gatewayUrl: GATEWAY_URL,
         token,
         task: { id: t.id, title: t.title, description: t.description },
         company: { name: t.name, slug: t.slug, mission: t.mission },
         budgets,
         traceId: taskId,
-        // §5.3 "every step streamed": each ReAct step is a Temporal heartbeat
-        // (long LLM tasks must outlive the 2-min heartbeatTimeout) and a
-        // ledger event — the dashboard terminal renders the worker thinking.
-        onStep(step) {
-          try {
-            heartbeat(step.n);
-          } catch {
-            /* outside an activity context (direct invocation in tests) */
-          }
-          void ledger
-            .append({
-              companyId: t.company_id,
-              actor: `worker:${taskId}`,
-              eventType: "worker_step",
-              payload: { n: step.n, thought: step.thought, ...(step.tool ? { tool: step.tool } : {}) },
-            })
-            .catch(() => {});
-        },
-      }),
+      },
+      // §5.3 "every step streamed": step events come back from the sandbox
+      // (in-process, pipe, or vsock) and on this side become a Temporal
+      // heartbeat (long LLM tasks must outlive the 2-min heartbeatTimeout) and a
+      // ledger event — the dashboard terminal renders the worker thinking.
+      (step) => {
+        try {
+          heartbeat(step.n);
+        } catch {
+          /* outside an activity context (direct invocation in tests) */
+        }
+        void ledger
+          .append({
+            companyId: t.company_id,
+            actor: `worker:${taskId}`,
+            eventType: "worker_step",
+            payload: { n: step.n, thought: step.thought, ...(step.tool ? { tool: step.tool } : {}) },
+          })
+          .catch(() => {});
+      },
     );
   } finally {
     await sandbox.release();
@@ -187,6 +190,10 @@ export async function runWorker(taskId: string): Promise<{ summary: string; step
  */
 export async function runCeoPlanning(companyId: string): Promise<{ userBrief: string }> {
   const company = await ceoCompany(sql, companyId);
+  // §5.2 step 1: pull fresh inbound mail into the mirror before gathering the
+  // unread-inbox digest. Best effort — a mail-server hiccup never blocks the
+  // heartbeat (the digest then reads the existing mirror).
+  await syncInboxFromEnv(sql, ledger, companyId).catch(() => {});
   const ctx = await gatherCeoContext(sql, company);
   const { system, hash } = loadCeoPrompt(company);
 

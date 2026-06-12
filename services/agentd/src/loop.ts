@@ -2,6 +2,7 @@ import { z } from "zod";
 import { chat, llmConfigFromEnv, tracerFromEnv } from "@opencorp/llm";
 import { callTool } from "@opencorp/mcp-client";
 import { scriptedPolicy } from "./scripted";
+import type { WorkerSpec } from "./spec";
 
 /**
  * Worker agent loop (§5.3): ReAct over MCP-over-HTTP. In M2 this runs inside
@@ -12,14 +13,7 @@ import { scriptedPolicy } from "./scripted";
  * never by the prompt.
  */
 
-export interface WorkerTaskInput {
-  gatewayUrl: string;
-  token: string;
-  task: { id: string; title: string; description: string };
-  company: { name: string; slug: string; mission: string };
-  budgets?: { maxSteps?: number; maxWallClockMs?: number };
-  /** Langfuse trace id (§9.2); convention: the task id. */
-  traceId?: string;
+export interface WorkerTaskInput extends WorkerSpec {
   onStep?: (step: { n: number; thought: string; tool?: string }) => void;
 }
 

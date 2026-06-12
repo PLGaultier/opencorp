@@ -30,6 +30,7 @@
       "dependencies": {
         "@opencorp/ledgerd": "workspace:*",
         "@opencorp/mcp-client": "workspace:*",
+        "@opencorp/stalwart": "workspace:*",
         "hono": "^4.6.0",
         "postgres": "^3.4.5",
         "zod": "^3.24.0",
@@ -81,9 +82,20 @@
         "drizzle-kit": "^0.30.0",
       },
     },
+    "packages/stalwart": {
+      "name": "@opencorp/stalwart",
+      "version": "0.1.0",
+      "dependencies": {
+        "@opencorp/ledgerd": "workspace:*",
+        "postgres": "^3.4.5",
+      },
+    },
     "services/agentd": {
       "name": "@opencorp/agentd",
       "version": "0.1.0",
+      "bin": {
+        "agentd": "./src/main.ts",
+      },
       "dependencies": {
         "@opencorp/llm": "workspace:*",
         "@opencorp/mcp-client": "workspace:*",
@@ -109,6 +121,9 @@
     "services/sandboxd": {
       "name": "@opencorp/sandboxd",
       "version": "0.1.0",
+      "dependencies": {
+        "@opencorp/agentd": "workspace:*",
+      },
     },
     "workflows": {
       "name": "@opencorp/workflows",
@@ -120,6 +135,7 @@
         "@opencorp/llm": "workspace:*",
         "@opencorp/mcp-client": "workspace:*",
         "@opencorp/sandboxd": "workspace:*",
+        "@opencorp/stalwart": "workspace:*",
         "@temporalio/activity": "^1.11.0",
         "@temporalio/client": "^1.11.0",
         "@temporalio/worker": "^1.11.0",
@@ -344,6 +360,8 @@
     "@opencorp/sandboxd": ["@opencorp/sandboxd@workspace:services/sandboxd"],
 
     "@opencorp/schema": ["@opencorp/schema@workspace:packages/schema"],
+
+    "@opencorp/stalwart": ["@opencorp/stalwart@workspace:packages/stalwart"],
 
     "@opencorp/web": ["@opencorp/web@workspace:apps/web"],
 

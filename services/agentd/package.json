@@ -3,7 +3,13 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./main": "./src/main.ts",
+    "./runtime": "./src/runtime.ts",
+    "./spec": "./src/spec.ts"
+  },
+  "bin": {
+    "agentd": "./src/main.ts"
   },
   "dependencies": {
     "zod": "^3.24.0",
