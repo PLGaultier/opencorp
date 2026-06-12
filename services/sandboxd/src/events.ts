@@ -36,8 +36,36 @@ export class WorkerEventSink {
 }
 
 /**
+ * Reassemble NDJSON lines from arbitrarily-chunked text. Transports don't
+ * deliver tidy lines — a pipe read or an E2B `onStdout` callback can split one
+ * event across chunks or pack several into one — so every transport funnels its
+ * chunks through here before `WorkerEventSink`.
+ */
+export class LineBuffer {
+  private buffer = "";
+
+  constructor(private onLine: (line: string) => void) {}
+
+  push(chunk: string): void {
+    this.buffer += chunk;
+    let newline: number;
+    while ((newline = this.buffer.indexOf("\n")) >= 0) {
+      const line = this.buffer.slice(0, newline);
+      this.buffer = this.buffer.slice(newline + 1);
+      if (line.trim()) this.onLine(line);
+    }
+  }
+
+  /** Emit any unterminated tail once the stream is known to be finished. */
+  flush(): void {
+    if (this.buffer.trim()) this.onLine(this.buffer);
+    this.buffer = "";
+  }
+}
+
+/**
  * Split a byte stream into trimmed lines, invoking `onLine` per newline. Used to
- * pump a child process's stdout or a vsock connection through `WorkerEventSink`.
+ * pump a child process's stdout through `WorkerEventSink`.
  */
 export async function pumpLines(
   stream: ReadableStream<Uint8Array>,
@@ -45,17 +73,11 @@ export async function pumpLines(
 ): Promise<void> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  const lines = new LineBuffer(onLine);
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let newline: number;
-    while ((newline = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, newline);
-      buffer = buffer.slice(newline + 1);
-      if (line.trim()) onLine(line);
-    }
+    lines.push(decoder.decode(value, { stream: true }));
   }
-  if (buffer.trim()) onLine(buffer);
+  lines.flush();
 }

@@ -4,9 +4,9 @@ import { SubprocessSandboxPool } from "../src/subprocess";
 /**
  * Subprocess pool (§8): real OS-process isolation. These run the actual agentd
  * runtime as a child process against a fake MCP gateway, exercising the full
- * serialize-spec → stream-NDJSON-events seam — the same contract Firecracker
- * uses over vsock. The agent runs offline (LITELLM_URL="" → scripted policy) so
- * no API key is needed.
+ * serialize-spec → stream-NDJSON-events seam — the same contract the E2B pool
+ * uses over the hosted-sandbox API. The agent runs offline (LITELLM_URL="" →
+ * scripted policy) so no API key is needed.
  */
 const agentdMain = new URL("../../agentd/src/main.ts", import.meta.url).pathname;
 const slowFixture = new URL("./fixtures/slow-agentd.ts", import.meta.url).pathname;

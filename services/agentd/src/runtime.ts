@@ -5,7 +5,7 @@ import type { WorkerSpec, WorkerEvent } from "./spec";
  * In-sandbox runtime (§8). Drives the ReAct loop from a serializable spec and
  * reports back purely as `WorkerEvent`s — no shared memory, no closure. This is
  * the boundary that lets the identical agent loop run in-process, in a child
- * process, or inside a Firecracker microVM unchanged.
+ * process, or inside a hosted E2B sandbox unchanged.
  *
  * It never throws: a thrown loop (budget exceeded, gateway down) is reported as
  * a terminal `error` event so the host always sees a clean end-of-stream.

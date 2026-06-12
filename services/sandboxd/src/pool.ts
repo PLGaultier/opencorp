@@ -8,8 +8,8 @@ import { runWorkerTask, type WorkerSpec, type WorkerTaskResult } from "@opencorp
  * rest of the platform depends on; the implementation is swappable:
  *   - LocalSandboxPool: runs the loop in-process (dev/tests; no isolation).
  *   - SubprocessSandboxPool: runs `agentd` as a separate OS process (real
- *     crash/memory isolation, killable; the default for hosts without KVM).
- *   - FirecrackerSandboxPool: snapshot-restored microVMs on bare metal (§8).
+ *     crash/memory isolation, killable; the local default).
+ *   - E2bSandboxPool: one hosted microVM per task on e2b.dev (§8; prod).
  * Because the contract is just {claim → execAgent(spec) → release}, the agent
  * loop moves between them unchanged — the only difference is where the bytes of
  * the spec are delivered (function call, pipe, or vsock).
@@ -94,7 +94,7 @@ class LocalSandbox implements Sandbox {
 
   async execAgent(spec: WorkerSpec, onStep?: OnStep): Promise<WorkerTaskResult> {
     // In-process: the loop runs in the host's own memory (no isolation). Used in
-    // dev/tests; prod selects subprocess or firecracker.
+    // dev/tests; prod selects subprocess or e2b.
     return this.run(() =>
       runWorkerTask({
         gatewayUrl: spec.gatewayUrl,

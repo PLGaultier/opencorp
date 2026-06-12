@@ -2,9 +2,9 @@
  * Egress proxy (§8). Every sandbox's network egress goes through a logging
  * filter: only http(s), never RFC1918 / link-local / cloud-metadata, and — when
  * an allowlist is configured — only approved hosts. A decision hook lets the
- * caller record blocked attempts to the transparency ledger. In prod this is a
- * real proxy on the virtio-net TAP; here it's the same policy enforced in TS so
- * the worker behaves identically before and after the move into Firecracker.
+ * caller record blocked attempts to the transparency ledger. Inside an E2B
+ * sandbox the worker is already on remote infra; this is the same policy
+ * enforced in TS so the worker behaves identically across isolation boundaries.
  */
 const PRIVATE_HOST =
   /^(localhost|127\.|10\.|192\.168\.|169\.254\.|::1$|fc00:|fd00:|172\.(1[6-9]|2\d|3[01])\.)/i;

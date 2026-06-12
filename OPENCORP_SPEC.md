@@ -15,7 +15,7 @@ Derived from NanoCorp's public site, documentation, FAQ, rate-limit docs and API
 |---|---|---|---|
 | 1 | **One-prompt company creation** | User writes a prompt → platform spins up a company with a mission, a CEO agent, a website, an email address, a DB, a repo, a payment link — in under ~2 min | `POST /companies` orchestration workflow (Temporal) provisioning all resources |
 | 2 | **CEO agent** | Persistent chat agent per company; free to talk to; plans, creates tasks, updates mission; cannot pause the company itself | Long-lived "Executive" agent with planning loop + task creation tools |
-| 3 | **Worker agents** | CEO delegates tasks to specialized workers executing in isolated sandboxes; one task per company at a time | Ephemeral worker agents in Firecracker/gVisor sandboxes, serialized per company via workflow mutex |
+| 3 | **Worker agents** | CEO delegates tasks to specialized workers executing in isolated sandboxes; one task per company at a time | Ephemeral worker agents in E2B-hosted microVM sandboxes, serialized per company via workflow mutex |
 | 4 | **Task system** | Tasks have states (pending/to-do/running/failed/done), daily caps ("Task Throttle"), conglomerate-wide credit caps, manual Run overrides caps, failed tasks auto-refund | Durable Temporal workflows + Postgres task table + credit ledger with compensating refund transactions |
 | 5 | **Scheduling** | Agents "run on schedules, complete tasks, report back"; one autonomous dispatch cycle per day per company | Temporal Schedules (cron) per company → dispatch workflow |
 | 6 | **Tool belt** | Payments (products, payment links, revenue), website deploy (subdomain + custom domain), real send/receive email, browser automation, documents/KB, prospect search, analytics, dedicated Postgres per company, full Linux code sandbox, GitHub repo | MCP tool servers (§7), one server per capability domain |
@@ -60,8 +60,8 @@ flowchart TB
         VAULT[Infisical<br/>secrets]
     end
 
-    subgraph ExecPlane["Execution Plane (bare metal)"]
-        SAND[Sandbox Pool<br/>Firecracker microVMs<br/>fallback: gVisor]
+    subgraph ExecPlane["Execution Plane (E2B cloud)"]
+        SAND[Sandbox Pool<br/>E2B hosted microVMs<br/>one per task]
         BROWSER[Headless browser fleet<br/>Playwright + browser-use]
     end
 
@@ -91,7 +91,7 @@ flowchart TB
 
 **Three planes, strictly separated:**
 1. **Control plane** — stateless services on k3s. Never executes agent code.
-2. **Execution plane** — bare-metal nodes running Firecracker microVMs. Agents only run here. All egress proxied and logged.
+2. **Execution plane** — E2B-hosted microVMs (one per task). Agents only run here; because it lives in E2B's cloud, the MCP gateway and LLM proxy must be publicly reachable.
 3. **Capability services** — everything a company "can do" is reachable from sandboxes *only through the MCP gateway* (single choke point → uniform auth, rate limits, audit).
 
 ---
@@ -100,7 +100,7 @@ flowchart TB
 
 | Concern | Decision | Rationale | Fallback |
 |---|---|---|---|
-| Backend languages | **TypeScript (Bun) for API/gateway; Go for sandbox manager** | TS shares types with frontend & MCP SDK; Go for firecracker-go-sdk control | Python/FastAPI |
+| Backend languages | **TypeScript (Bun) throughout, including the sandbox pool** | TS shares types with frontend & MCP SDK; the E2B SDK is TS-native | Python/FastAPI |
 | Frontend | **Next.js 15 (App Router) + Tailwind + shadcn/ui** | SSR for public ledger pages (SEO), streaming UI | SvelteKit |
 | Workflow engine | **Temporal (self-hosted)** | Durable execution is the heart of "autonomous": retries, cron schedules, signals (pause/run-now), per-company serialization via workflow ID `company:{id}`, step-level visibility | Hatchet (Postgres-only, lighter) |
 | LLM gateway | **LiteLLM proxy** | One OpenAI-compatible endpoint; routes to self-hosted vLLM and/or commercial APIs; per-company virtual keys, budgets, fallbacks, cost logs | OpenRouter (not self-hosted) |
@@ -111,7 +111,7 @@ flowchart TB
 | Per-company DB | **Dedicated database per company on shared PG cluster** via **PgBouncer**, provisioned by a Temporal activity | Matches "dedicated Postgres with full SQL access"; cheap isolation; quotas enforced | Neon self-host (heavy) |
 | Cache/limits/pubsub | **Valkey** | Sliding-window limits, sandbox pool bookkeeping | Redis |
 | Object storage | **MinIO** | Screenshots, artifacts, attachments, ledger checkpoints | Garage |
-| Sandboxes | **Firecracker microVMs** managed by Go `sandboxd`: pre-warmed pool, snapshot restore (~125 ms boot); rootfs Ubuntu 24 + Python 3.12 + Node 22 + Git + Playwright | True VM isolation for arbitrary AI-written code (the approach behind E2B) | gVisor `runsc` on K8s if no bare metal |
+| Sandboxes | **E2B hosted microVMs** (e2b.dev) behind the TS `sandboxd` pool abstraction: one sandbox per task, ~150–400 ms create, custom template = Debian + Bun; agentd bundle uploaded at claim | True Firecracker VM isolation without operating the fleet ourselves (boot, snapshots, networking, GC are E2B's problem); pay-per-second | `subprocess` pool (OS-process isolation) for local/dev |
 | Browser automation | **Playwright + browser-use** in-sandbox; shared headless fleet for heavy sessions | OSS, robust extract/screenshot primitives | Chromedp |
 | Email | **Stalwart Mail Server** (Rust; SMTP/IMAP/JMAP; DKIM/SPF/DMARC/ARC built-in). One domain, address per company `{slug}@opencorp.app` | Modern single binary; JMAP is ideal for programmatic send/receive | Postal; SES relay for deliverability |
 | Website hosting | **Caddy** wildcard `*.opencorp.app` + **on-demand TLS** for custom domains; deploy service publishes static/SSR builds; SSR apps as per-company containers | Replaces Vercel; custom domain = one CNAME | Coolify (full PaaS, heavier) |
@@ -124,7 +124,7 @@ flowchart TB
 | Prospecting | **No OSS Apollo exists.** `prospect-mcp` = Playwright public-web search + open datasets + pluggable BYO-key enrichment drivers (Apollo/Hunter keys via Infisical) | Honest about the gap; pluggable | — |
 | LLM observability | **Langfuse (self-hosted)**, public read-only project per company | Traces every generation; public trace URLs power transparency | Phoenix |
 | Metrics/logs | **Prometheus + Grafana + Loki + OpenTelemetry** | Standard | — |
-| Infra | **k3s** on Hetzner; **bare-metal AX nodes** for Firecracker (KVM required); optional GPU node for vLLM | Best perf/€ | Any K8s |
+| Infra | **k3s** on Hetzner for the control plane; sandboxes are E2B-hosted (no KVM/bare metal needed); optional GPU node for vLLM | Best perf/€; execution plane is pay-per-use | Any K8s |
 
 ---
 
@@ -214,7 +214,7 @@ User ──chat──▶ CEO Agent (persistent, per company)
                   │ one task running per company at a time (workflow mutex)
                   ▼
               Worker Agent (ephemeral, per task)
-                  │ fresh Firecracker sandbox containing:
+                  │ fresh E2B sandbox containing:
                   │  - role prompt + task brief + RAG-retrieved KB docs
                   │  - MCP gateway token scoped to {company, task}
                   │  - company secrets injected via Infisical machine identity
@@ -246,12 +246,12 @@ User ──chat──▶ CEO Agent (persistent, per company)
 ```
 acquire company mutex (Temporal workflow-id reuse policy)
 → charge estimated credits (ledger entry: task_charge)
-→ claim sandbox from warm pool (snapshot restore, <1 s)
+→ create a fresh E2B sandbox (~150–400 ms, lifetime capped at wall clock + grace)
 → inject MCP token, Infisical identity, repo clone (Forgejo deploy key)
 → agent loop (ReAct: think → MCP tool → observe), hard budgets:
      30 min wall clock · 80 steps · 400k tokens
      2 vCPU / 4 GB RAM / 8 GB disk · 1 GB egress
-     (enforced by Temporal timeouts + cgroups + egress proxy — never by prompt)
+     (enforced by Temporal timeouts + sandbox kill + E2B lifetime — never by prompt)
    every step streamed: SSE → dashboard, trace → Langfuse, event → ledger
 → success: write report doc, reconcile credits (charge actual, refund diff)
 → failure/timeout: FULL refund (task_refund), mark failed; CEO sees it next heartbeat
@@ -330,13 +330,17 @@ Valkey sliding window per `{company_id, tool}`. Defaults copied from NanoCorp's 
 
 ---
 
-## 8. Sandbox Design (`sandboxd`, Go)
+## 8. Sandbox Design (`sandboxd`, TS)
 
-- **Pool:** N pre-booted Firecracker microVMs restored from a memory snapshot. Rootfs (Packer/Buildroot): Ubuntu 24 minimal, Python 3.12 + uv, Node 22 + pnpm, git, ripgrep, Playwright + Chromium, MCP client shim. Claim latency target **< 1 s**.
-- **Isolation:** one VM per task; jailer + seccomp; cgroups v2 (2 vCPU/4 GB); virtio-net TAP behind a logging egress proxy (blocks RFC1918 + cloud metadata IPs).
-- **Filesystem:** overlayfs scratch; `/workspace` seeded with repo clone; artifacts uploaded to MinIO on exit.
-- **In-VM runtime:** `agentd` (TS): receives task spec, runs the LLM loop against LiteLLM, speaks MCP-over-HTTP to the gateway, streams step events.
-- **Fallback (no bare metal):** identical runner in gVisor pods (RuntimeClass `runsc`) — same API, weaker isolation, documented.
+Workers run in **E2B hosted sandboxes** (e2b.dev): true Firecracker microVM isolation, but the fleet — boot, snapshots, networking, garbage collection — is E2B's problem, not ours. `sandboxd` is a thin TS pool abstraction; the seam is `claim(spec) → execAgent(WorkerSpec) → NDJSON WorkerEvents`, identical across all backends, so the agent loop never changes.
+
+- **Pool:** one E2B sandbox per task, created on claim (~150–400 ms, no prewarm needed). `CapacityGate` bounds concurrency (default 16, under the E2B Hobby plan's 20-sandbox limit; `SANDBOX_CAPACITY` to override).
+- **Template** (`infra/e2b`, `opencorp-agentd`): Debian base + Bun + git/ripgrep. agentd is *not* baked in — the pool bundles the in-repo agentd (`Bun.build`, single file) and uploads it at claim time, so the worker version always matches the repo and the template almost never rebuilds.
+- **Transport:** spec written to `/home/user/spec.json`, agentd run with stdin redirected from it; events stream back over the command's stdout. Byte-for-byte the same contract as the local `subprocess` pool.
+- **Budgets:** sandbox lifetime = wall clock + 60 s grace (E2B's reaper cleans up even if sandboxd crashes); host-side timer kills the sandbox at the wall clock; command-level timeout as a third layer. Never enforced by prompt.
+- **Isolation:** one microVM per task, never reused (§5.3); 2 vCPU / 4 GB per sandbox at E2B's default tier; sandbox tagged with `{taskId, companyId}` metadata for audit.
+- **Networking:** the worker runs in E2B's cloud, so the MCP gateway and LiteLLM proxy must be publicly reachable (the pool rejects loopback URLs). Egress policy is enforced at the MCP gateway choke point.
+- **Local/dev:** `SANDBOX_KIND=local` (in-process) or `subprocess` (OS-process isolation) — same API, no E2B account needed.
 
 ---
 
@@ -372,12 +376,12 @@ Credit and money ledgers are queryable per company: tokens → cost (from LiteLL
 
 1. **Prefix caching (vLLM) + prompt layout discipline:** static system prompt → company block → task block → dynamic tail. Target ≥ 70% cached prefix tokens on worker steps.
 2. **Tiered routing:** ~80% of agent steps are tool-glue → mini/standard; only planning hits frontier. Enforced in LiteLLM, audited in Langfuse.
-3. **Snapshot-restored sandboxes:** pool sized by Little's law (arrival rate × P95 duration); autoscaler keeps pool ≥ max(2, 1.2 × concurrent tasks).
-4. **Serialization where it matters:** one task per company (correctness, NanoCorp behavior) but unbounded cross-company parallelism — throughput scales with sandbox nodes, not the control plane.
+3. **Pay-per-second sandboxes:** E2B bills per sandbox-second (~$0.06 for a 30-min task), so idle capacity costs nothing — no pool sizing, no autoscaler.
+4. **Serialization where it matters:** one task per company (correctness, NanoCorp behavior) but unbounded cross-company parallelism — throughput scales with the E2B plan's concurrency limit, not the control plane.
 5. **SSE via Postgres LISTEN/NOTIFY** — no extra broker for dashboards.
 6. **DB:** PgBouncer transaction pooling; ledger writes group-committed in the gateway; `ledger_events` partitioned monthly with BRIN on `created_at`.
 7. **Credit caps as backpressure:** dispatch-time check = indexed 24 h SUM over `credit_entries` (covering index), matching NanoCorp semantics.
-8. **Targets:** prompt → live website < 60 s · task pickup < 2 s · dashboard event latency < 500 ms · 100 concurrent tasks on 8 bare-metal nodes.
+8. **Targets:** prompt → live website < 60 s · task pickup < 2 s · dashboard event latency < 500 ms · 100 concurrent tasks on an E2B Pro plan (100-sandbox limit).
 
 ---
 
@@ -387,7 +391,8 @@ Credit and money ledgers are queryable per company: tokens → cost (from LiteLL
 |---|---|---|---|
 | 3× CCX23 (k3s) | 4 vCPU/16 GB | API, Next.js, Temporal, gateway, LiteLLM, Langfuse, Umami, Lago, Infisical, Forgejo | ~75 |
 | 1× CCX33 | 8 vCPU/32 GB | PostgreSQL (control + company cluster), Valkey, PgBouncer | ~50 |
-| 1–N× AX52 bare metal | 16c/64 GB, KVM | sandboxd + Firecracker pool (~12 concurrent tasks/node), browser fleet, MinIO | ~60/node |
+| E2B cloud (no node) | 2 vCPU/4 GB per sandbox | worker sandboxes, one microVM per task | pay-per-use (~$0.06 / 30-min task) |
+| 1× CCX23 | 4 vCPU/16 GB | browser fleet, MinIO | ~25 |
 | 1× CX22 | small, dedicated IP | Stalwart mail (clean IP, rDNS/PTR set) | ~5 |
 | GPU (optional) | L40S-class or external API | vLLM (Qwen3-32B AWQ fits; 235B → rent an API) | varies |
 
@@ -408,7 +413,7 @@ opencorp/
 │   ├── api/            # Bun/Hono REST + SSE
 │   └── gateway/        # MCP tool gateway (authz, limits, audit)
 ├── services/
-│   ├── sandboxd/       # Go: Firecracker pool manager
+│   ├── sandboxd/       # TS: sandbox pool (local | subprocess | E2B)
 │   ├── agentd/         # TS: in-sandbox agent runner (LLM loop)
 │   ├── deployd/        # site build & publish, Caddy admin client
 │   ├── ledgerd/        # append, hash chain, checkpoints, verify
@@ -419,7 +424,7 @@ opencorp/
 ├── prompts/            # versioned ceo.md, worker_*.md, redaction rules
 ├── infra/
 │   ├── helm/
-│   ├── rootfs/         # sandbox image build (Packer/Buildroot)
+│   ├── e2b/            # E2B sandbox template (Dockerfile + build docs)
 │   └── compose/        # dev stack
 ├── packages/           # shared TS: Drizzle schema, zod types, mcp-client
 └── docs/               # self-hosting, threat model, ledger spec
@@ -433,11 +438,11 @@ opencorp/
 
 **M1 — One prompt → live website (weeks 2–3):** `CreateCompany` with Forgejo + deployd + Caddy subdomains + Umami. *Exit:* prompt → public site in < 90 s.
 
-**M2 — Tasks & workers (weeks 3–5):** `TaskRun`, gVisor sandboxes first, `agentd` loop, `org/docs/db/code` MCP servers, live SSE task view, credit charge/refund. *Exit:* CEO heartbeat creates tasks; a worker edits the site and redeploys autonomously; a failed task auto-refunds.
+**M2 — Tasks & workers (weeks 3–5):** `TaskRun`, in-process/subprocess sandboxes first, `agentd` loop, `org/docs/db/code` MCP servers, live SSE task view, credit charge/refund. *Exit:* CEO heartbeat creates tasks; a worker edits the site and redeploys autonomously; a failed task auto-refunds.
 
 **M3 — Real-world arms (weeks 5–8):** email (Stalwart + email-mcp + limits), payments (Stripe adapter, products, payment link, revenue mirror), browser-mcp, analytics-mcp, secrets. *Exit:* a company sells a digital product end-to-end with zero human action after the initial prompt, every step on the public ledger.
 
-**M4 — Hardening & scale (weeks 8–12):** Firecracker pool, egress proxy, redaction audit, withdrawals (Connect), Lago plans, public `/live` + P&L pages, Langfuse public traces, load test 100 concurrent tasks.
+**M4 — Hardening & scale (weeks 8–12):** E2B sandbox pool, egress proxy, redaction audit, withdrawals (Connect), Lago plans, public `/live` + P&L pages, Langfuse public traces, load test 100 concurrent tasks.
 
 **M5 — Frontier (post-v1):** ads adapter (budgeted Google/Meta campaigns), social posting MCP, multi-agent departments (CMO/CTO sub-planners), prospect enrichment drivers, federation (multiple OpenCorp instances sharing the ledger format).
 
@@ -448,11 +453,12 @@ opencorp/
 - **Prompt injection** via fetched web/email content: the gateway treats all external content as untrusted data; money-out and irreversible tools require approval unless `autonomy_level=full`; injected instructions can never change gateway policy.
 - **Abuse** (spam, scams, fake storefronts): outbound email throttles + a mini-model content-policy classifier on outbound email and site deploys; the public ledger itself is both deterrent and audit trail.
 - **Legal:** the platform creates *software-operated projects*, not legal entities; Stripe Connect places KYC on the payment provider. State this plainly.
-- **No OSS replacement exists** for card acquiring (Stripe, or Hyperswitch + an acquirer) and B2B contact data (Apollo-class) — these stay pluggable adapters; everything else is fully self-hostable.
+- **No OSS replacement exists** for card acquiring (Stripe, or Hyperswitch + an acquirer) and B2B contact data (Apollo-class) — these stay pluggable adapters.
+- **Sandbox execution is a hosted dependency:** E2B runs the worker microVMs (pay-per-second, API key). The `SandboxPool` seam keeps the control plane self-hostable and the backend swappable (the `subprocess` pool works anywhere), but VM-grade isolation at zero ops cost means accepting a cloud service here. State this plainly.
 - **Economic reality:** autonomy quality is bounded by model quality; ship `autonomy_level=supervised` as the default and let users opt up.
 
 ---
 
 ## 16. Definition of Done (v1)
 
-A fresh `helm install opencorp` on 3 VMs + 1 bare-metal node, configured with one LLM endpoint and (optionally) Stripe keys, lets a user type one prompt and receive: a named company with a mission, a live website on a subdomain, a working email address, a per-company database and Git repo, a CEO agent to chat with, and daily autonomous task runs under credit caps and per-tool rate limits — with **every action verifiable on a public, hash-chained ledger linked to full LLM traces**.
+A fresh `helm install opencorp` on a handful of VMs, configured with one LLM endpoint, an E2B API key, and (optionally) Stripe keys, lets a user type one prompt and receive: a named company with a mission, a live website on a subdomain, a working email address, a per-company database and Git repo, a CEO agent to chat with, and daily autonomous task runs under credit caps and per-tool rate limits — with **every action verifiable on a public, hash-chained ledger linked to full LLM traces**.

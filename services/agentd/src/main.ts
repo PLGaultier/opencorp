@@ -5,10 +5,10 @@ import { parseWorkerSpec } from "./spec";
 /**
  * Entry point for the worker program that runs *inside* a sandbox (§8). Reads a
  * `WorkerSpec` as JSON on stdin and writes `WorkerEvent`s as NDJSON on stdout,
- * one per line. In a Firecracker microVM, a tiny init bridges the guest vsock
- * port to this process's stdin/stdout (see infra/rootfs); in the subprocess
- * pool the host pipes stdin/stdout directly. The contract is identical either
- * way, which is the whole point of the seam.
+ * one per line. In an E2B sandbox the host uploads this program as a bundle and
+ * runs it with stdin redirected from the spec file; in the subprocess pool the
+ * host pipes stdin/stdout directly. The contract is identical either way, which
+ * is the whole point of the seam.
  */
 async function main(): Promise<void> {
   const raw = await Bun.stdin.text();

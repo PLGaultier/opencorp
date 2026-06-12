@@ -3,10 +3,10 @@ import { z } from "zod";
 /**
  * Serializable worker contract (§8). The agent loop used to receive a JS closure
  * (`sandbox.run(fn)`), which only works in-process. To move the worker into an
- * isolated boundary — a child process or a Firecracker microVM — the unit of
+ * isolated boundary — a child process or a hosted E2B sandbox — the unit of
  * work must cross a serialization seam: a `WorkerSpec` in, a stream of
  * `WorkerEvent`s out. The in-sandbox `agentd` runtime consumes the spec on
- * stdin/vsock and emits NDJSON events; the host pool parses them back.
+ * stdin and emits NDJSON events; the host pool parses them back.
  */
 export const WorkerSpecSchema = z.object({
   gatewayUrl: z.string(),

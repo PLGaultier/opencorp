@@ -7,10 +7,10 @@ import { WorkerEventSink, pumpLines } from "./events";
  * Subprocess sandbox pool (§8). Runs the `agentd` worker as a separate OS
  * process: a crash, infinite loop, or memory blowup in AI-written code is
  * contained to that process and forcibly killable — none of which is true of the
- * in-process LocalSandboxPool. This is the default isolation on hosts without
- * KVM, and the exact same transport shape (write spec → read NDJSON) that the
- * Firecracker pool uses over vsock, so the agent loop is byte-for-byte unchanged
- * across the two.
+ * in-process LocalSandboxPool. This is the default isolation for local runs,
+ * and the exact same transport shape (write spec → read NDJSON) that the E2B
+ * pool uses against the hosted-sandbox API, so the agent loop is byte-for-byte
+ * unchanged across the two.
  */
 export interface SubprocessPoolOptions {
   capacity?: number;
@@ -23,7 +23,7 @@ export interface SubprocessPoolOptions {
   runtime?: string;
 }
 
-function resolveAgentdEntry(explicit?: string): string {
+export function resolveAgentdEntry(explicit?: string): string {
   if (explicit) return explicit;
   if (process.env.AGENTD_ENTRY) return process.env.AGENTD_ENTRY;
   try {

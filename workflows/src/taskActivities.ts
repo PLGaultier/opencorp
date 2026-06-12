@@ -32,10 +32,10 @@ const sql = postgres(DATABASE_URL, { max: 5 });
 const ledger = new Ledger(new PgStore(DATABASE_URL));
 
 // Execution-plane pool (§8), selected by SANDBOX_KIND: `local` (in-process,
-// dev/tests), `subprocess` (separate OS process — real isolation, the prod
-// default off bare metal), or `firecracker` (snapshot-restored microVMs on
-// KVM). The agent loop is identical across all three. One sandbox per task,
-// never reused (§5.3).
+// dev/tests), `subprocess` (separate OS process — real isolation, the local
+// default), or `e2b` (one hosted microVM per task on e2b.dev — prod). The
+// agent loop is identical across all three. One sandbox per task, never
+// reused (§5.3).
 const sandboxes = createSandboxPool();
 
 export interface TaskRow {

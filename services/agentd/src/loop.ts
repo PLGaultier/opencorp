@@ -5,9 +5,9 @@ import { scriptedPolicy } from "./scripted";
 import type { WorkerSpec } from "./spec";
 
 /**
- * Worker agent loop (§5.3): ReAct over MCP-over-HTTP. In M2 this runs inside
- * the Temporal worker process; M4 moves it unchanged into Firecracker — the
- * only contract is {gatewayUrl, token, budgets}.
+ * Worker agent loop (§5.3): ReAct over MCP-over-HTTP. It runs unchanged
+ * in-process, in a subprocess, or in a hosted E2B sandbox — the only contract
+ * is {gatewayUrl, token, budgets}.
  *
  * Hard budgets are enforced here and by the Temporal activity timeout —
  * never by the prompt.

@@ -6,6 +6,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@opencorp/agentd": "workspace:*"
+    "@opencorp/agentd": "workspace:*",
+    "e2b": "^2.29.1"
   }
 }
