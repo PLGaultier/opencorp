@@ -1,0 +1,49 @@
+# Stalwart dev config (§3 email, §12). Deterministic: mounted read-only so the
+# container's first-run wizard is skipped and the admin credential is known to
+# the platform (STALWART_ADMIN_SECRET). Prod hardens this: dedicated IP, PTR,
+# DKIM/SPF/DMARC, TLS listeners — see §12 deliverability checklist.
+
+[server.listener.smtp]
+bind = ["[::]:25"]
+protocol = "smtp"
+
+[server.listener.submission]
+bind = ["[::]:587"]
+protocol = "smtp"
+
+[server.listener.imap]
+bind = ["[::]:143"]
+protocol = "imap"
+
+# JMAP + management API — the only listener OpenCorp actually needs in dev.
+[server.listener.http]
+bind = ["[::]:8080"]
+protocol = "http"
+
+[storage]
+data = "rocksdb"
+fts = "rocksdb"
+blob = "rocksdb"
+lookup = "rocksdb"
+directory = "internal"
+
+[store."rocksdb"]
+type = "rocksdb"
+path = "/opt/stalwart/data"
+compression = "lz4"
+
+[directory."internal"]
+type = "internal"
+store = "rocksdb"
+
+[tracer."stdout"]
+type = "stdout"
+level = "info"
+ansi = false
+enable = true
+
+# Fallback admin used by the provisioning activity (StalwartAdmin). Dev-only
+# credential; prod must override via env/Infisical.
+[authentication.fallback-admin]
+user = "admin"
+secret = "opencorp-dev-admin"

@@ -104,8 +104,27 @@ services:
       postgres:
         condition: service_healthy
 
+  # Real email (§3): SMTP/IMAP/JMAP in one binary. The platform talks to the
+  # HTTP listener only (JMAP + management API on host :8081). Enable in the
+  # stack with: STALWART_URL=http://localhost:8081 MAIL_DOMAIN=opencorp.dev
+  # (gateway + temporal worker env); unset → everything degrades to local mode.
+  # NB: MAIL_DOMAIN needs a real public-suffix TLD (not .test/.local) — Stalwart
+  # rejects JMAP sending identities on unknown TLDs. The domain stays local to
+  # this instance; nothing is delivered outside the box in dev.
+  stalwart:
+    image: stalwartlabs/stalwart:v0.13.4
+    ports: ["8081:8080", "1025:25", "1587:587", "1143:143"]
+    volumes:
+      - stalwartdata:/opt/stalwart
+      - ./stalwart.toml:/opt/stalwart/etc/config.toml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz/live || exit 1"]
+      interval: 5s
+      retries: 12
+
 volumes:
   pgdata:
   miniodata:
   sites:
   forgejodata:
+  stalwartdata:

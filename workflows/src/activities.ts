@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import { extractCompanySpec, llmConfigFromEnv, type CompanySpec } from "@opencorp/llm";
 import { Ledger, PgStore, type LedgerEventInput } from "@opencorp/ledgerd";
+import { StalwartAdmin, deriveMailboxPassword, stalwartEnv } from "@opencorp/stalwart";
 import { ensureHeartbeatSchedule } from "./schedule";
 
 /**
@@ -67,6 +68,35 @@ export async function createForgejoRepo(slug: string): Promise<string | null> {
     throw new Error(`forgejo create repo failed: ${res.status} ${await res.text()}`);
   }
   return slug;
+}
+
+/**
+ * Real mailbox per company (§6 step 2: "create Stalwart mailbox via JMAP admin
+ * API"). The mailbox password is derived from the platform master secret —
+ * nothing stored, so the activity is idempotent under Temporal retries (domain
+ * and account creation both treat "already exists" as success). Optional in
+ * dev: no STALWART_URL → the address stays a mirror-only identity.
+ */
+export async function provisionMailbox(input: {
+  companyId: string;
+  slug: string;
+  name: string;
+}): Promise<string | null> {
+  const cfg = stalwartEnv();
+  if (!cfg) return null; // optional in dev
+  const admin = new StalwartAdmin(cfg.url, cfg.adminUser, cfg.adminSecret);
+  await admin.ensureDomain(cfg.domain);
+  const address = `${input.slug}@${cfg.domain}`;
+  await admin.ensureMailbox(address, deriveMailboxPassword(cfg.masterSecret, address), input.name);
+  // The mail domain may differ from the web domain; the mailbox is authoritative.
+  await sql`UPDATE companies SET email_address = ${address} WHERE id = ${input.companyId}`;
+  await ledger.append({
+    companyId: input.companyId,
+    actor: "system",
+    eventType: "mailbox_provisioned",
+    payload: { address, transport: "stalwart" },
+  });
+  return address;
 }
 
 export async function createUmamiSite(slug: string, name: string): Promise<string | null> {

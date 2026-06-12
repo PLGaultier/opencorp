@@ -4,7 +4,7 @@ import postgres from "postgres";
 import type { Ledger } from "@opencorp/ledgerd";
 import type { SecretStore } from "./secrets";
 import { paymentsFor } from "./providers/payments";
-import { emailFor, isValidAddress, listUnsubscribeHeader } from "./providers/email";
+import { emailFor, isValidAddress, listUnsubscribeHeader, syncInbox } from "./providers/email";
 import { getAnalytics } from "./providers/analytics";
 import { FetchBrowser } from "./providers/browser";
 
@@ -378,7 +378,7 @@ export const registry: Registry = {
           if (Number(n!.n) >= 3) return { error: "recipient_frequency_cap", recipient: rcpt };
         }
 
-        const provider = await emailFor(ctx.companyId, ctx.secrets);
+        const provider = await emailFor(ctx.companyId, ctx.secrets, from);
         const { messageId } = await provider.send({
           from,
           to: args.to,
@@ -412,7 +412,7 @@ export const registry: Registry = {
         const from = c?.email_address;
         if (!from) return { error: "company_has_no_mailbox" };
         const subject = orig.subject.startsWith("Re:") ? orig.subject : `Re: ${orig.subject}`;
-        const provider = await emailFor(ctx.companyId, ctx.secrets);
+        const provider = await emailFor(ctx.companyId, ctx.secrets, from);
         const { messageId } = await provider.send({
           from,
           to: [orig.from_addr],
@@ -436,6 +436,9 @@ export const registry: Registry = {
       schema: z.object({ direction: z.enum(["in", "out"]).optional() }),
       write: false,
       async handler(ctx, args: { direction?: "in" | "out" }) {
+        // Best-effort JMAP sync so agents always see fresh inbound mail; a
+        // Stalwart hiccup degrades to the existing mirror, never blocks reads.
+        await syncInbox(ctx.sql, ctx.ledger, ctx.secrets, ctx.companyId).catch(() => {});
         return ctx.sql`
           SELECT id, direction, from_addr, to_addrs, subject, read, created_at FROM emails
           WHERE company_id = ${ctx.companyId}
@@ -447,6 +450,7 @@ export const registry: Registry = {
       schema: z.object({ emailId: z.string().uuid() }),
       write: false,
       async handler(ctx, args: { emailId: string }) {
+        await syncInbox(ctx.sql, ctx.ledger, ctx.secrets, ctx.companyId).catch(() => {});
         const [e] = await ctx.sql`
           SELECT id, direction, from_addr, to_addrs, subject, body_text, created_at FROM emails
           WHERE id = ${args.emailId} AND company_id = ${ctx.companyId}`;

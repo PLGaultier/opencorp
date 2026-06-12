@@ -1,0 +1,12 @@
+{
+  "name": "@opencorp/stalwart",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "postgres": "^3.4.5",
+    "@opencorp/ledgerd": "workspace:*"
+  }
+}
