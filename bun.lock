@@ -30,6 +30,7 @@
       "dependencies": {
         "@opencorp/ledgerd": "workspace:*",
         "@opencorp/mcp-client": "workspace:*",
+        "@opencorp/secrets": "workspace:*",
         "@opencorp/stalwart": "workspace:*",
         "hono": "^4.6.0",
         "postgres": "^3.4.5",
@@ -81,6 +82,10 @@
       "devDependencies": {
         "drizzle-kit": "^0.30.0",
       },
+    },
+    "packages/secrets": {
+      "name": "@opencorp/secrets",
+      "version": "0.1.0",
     },
     "packages/stalwart": {
       "name": "@opencorp/stalwart",
@@ -136,6 +141,7 @@
         "@opencorp/llm": "workspace:*",
         "@opencorp/mcp-client": "workspace:*",
         "@opencorp/sandboxd": "workspace:*",
+        "@opencorp/secrets": "workspace:*",
         "@opencorp/stalwart": "workspace:*",
         "@temporalio/activity": "^1.11.0",
         "@temporalio/client": "^1.11.0",
@@ -371,6 +377,8 @@
     "@opencorp/sandboxd": ["@opencorp/sandboxd@workspace:services/sandboxd"],
 
     "@opencorp/schema": ["@opencorp/schema@workspace:packages/schema"],
+
+    "@opencorp/secrets": ["@opencorp/secrets@workspace:packages/secrets"],
 
     "@opencorp/stalwart": ["@opencorp/stalwart@workspace:packages/stalwart"],
 

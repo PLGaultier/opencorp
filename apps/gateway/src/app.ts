@@ -6,7 +6,7 @@ import { Ledger, PgStore } from "@opencorp/ledgerd";
 import { verifyToken } from "@opencorp/mcp-client";
 import { registry, type ToolContext } from "./tools";
 import { MemoryRateLimiter } from "./ratelimit";
-import { secretStoreFromEnv } from "./secrets";
+import { secretStoreFromEnv, infisicalEnv, InfisicalClient, InfisicalAdmin } from "./secrets";
 import { FetchBrowser } from "./providers/browser";
 import { recordPayment } from "./revenue";
 import { processWithdrawal } from "./payout";
@@ -192,6 +192,39 @@ export function createGateway(opts?: {
       conglomerateId: co.conglomerate_id,
     });
     return c.json(result, result.status === "failed" ? 422 : 200);
+  });
+
+  // Set a per-company secret in the vault (§3). Owner-initiated from the
+  // dashboard; signed by the platform (not agents) like the other admin routes.
+  // The value is written to Infisical under /companies/{id} and never touches
+  // the ledger payload (only the key name + a redaction marker, §9.3).
+  const SecretBody = z.object({
+    companyId: z.string().uuid(),
+    key: z.string().min(1).max(128).regex(/^[A-Z0-9_]+$/, "key must be UPPER_SNAKE_CASE"),
+    value: z.string().min(1).max(10_000),
+  });
+
+  app.post("/admin/secrets", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
+    const parsed = SecretBody.safeParse(JSON.parse(raw || "{}"));
+    if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+
+    const cfg = infisicalEnv();
+    if (!cfg) return c.json({ error: "secrets_backend_unconfigured" }, 503);
+    const [co] = await sql`SELECT 1 FROM companies WHERE id = ${parsed.data.companyId}`;
+    if (!co) return c.json({ error: "company_not_found" }, 404);
+
+    const admin = new InfisicalAdmin(new InfisicalClient(cfg));
+    await admin.ensureCompanyFolder(parsed.data.companyId);
+    await admin.setCompanySecret(parsed.data.companyId, parsed.data.key, parsed.data.value);
+    await ledger.append({
+      companyId: parsed.data.companyId,
+      actor: "user",
+      eventType: "secret_set",
+      payload: { key: parsed.data.key, value: "[redacted]" },
+    });
+    return c.json({ ok: true, key: parsed.data.key });
   });
 
   return { app, sql, ledger };

@@ -36,12 +36,13 @@ export async function CreateCompany(input: CreateCompanyInput): Promise<CreateCo
     spec,
   });
 
-  // 3. parallel provisioning (DB, repo, analytics, real mailbox §6)
+  // 3. parallel provisioning (DB, repo, analytics, real mailbox, secret vault §6)
   const [, repo, umamiSiteId] = await Promise.all([
     act.provisionCompanyDb(spec.slug),
     act.createForgejoRepo(spec.slug),
     act.createUmamiSite(spec.slug, spec.name),
     act.provisionMailbox({ companyId, slug: spec.slug, name: spec.name }),
+    act.provisionSecrets(companyId),
   ]);
 
   await act.recordProvisioning({ companyId, repo, umamiSiteId });

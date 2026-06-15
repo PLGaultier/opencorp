@@ -20,6 +20,7 @@
     "@opencorp/sandboxd": "workspace:*",
     "@opencorp/mcp-client": "workspace:*",
     "@opencorp/stalwart": "workspace:*",
+    "@opencorp/secrets": "workspace:*",
     "postgres": "^3.4.5",
     "zod": "^3.24.0"
   },

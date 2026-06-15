@@ -104,6 +104,26 @@ services:
       postgres:
         condition: service_healthy
 
+  # Per-company secret vault (§3, §12). Backed by the shared Postgres
+  # (infisical DB, created by initdb) + Valkey. Bootstrap once (admin user → org
+  # → project → machine identity) via the UI at http://localhost:8082 or the
+  # admin API, then set INFISICAL_URL/CLIENT_ID/CLIENT_SECRET/PROJECT_ID for the
+  # gateway + worker. Unset → secrets resolve from env (dev contract).
+  infisical:
+    image: infisical/infisical:v0.161.0
+    environment:
+      ENCRYPTION_KEY: "6c1fe4e407b8911c104518103505b218" # dev-only 16-byte hex
+      AUTH_SECRET: "5lrMXKKWCVocS/uerPsl7V+TX/aLW7qUVnrxJoLERkU=" # dev-only base64
+      DB_CONNECTION_URI: postgres://opencorp:opencorp@postgres:5432/infisical
+      REDIS_URL: redis://valkey:6379
+      SITE_URL: http://localhost:8082
+    ports: ["8082:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+
   # Real email (§3): SMTP/IMAP/JMAP in one binary. The platform talks to the
   # HTTP listener only (JMAP + management API on host :8081). Enable in the
   # stack with: STALWART_URL=http://localhost:8081 MAIL_DOMAIN=opencorp.dev

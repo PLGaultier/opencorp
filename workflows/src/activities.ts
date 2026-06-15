@@ -2,6 +2,7 @@ import postgres from "postgres";
 import { extractCompanySpec, llmConfigFromEnv, type CompanySpec } from "@opencorp/llm";
 import { Ledger, PgStore, type LedgerEventInput } from "@opencorp/ledgerd";
 import { StalwartAdmin, deriveMailboxPassword, stalwartEnv } from "@opencorp/stalwart";
+import { InfisicalAdmin, InfisicalClient, infisicalEnv } from "@opencorp/secrets";
 import { ensureHeartbeatSchedule } from "./schedule";
 
 /**
@@ -97,6 +98,27 @@ export async function provisionMailbox(input: {
     payload: { address, transport: "stalwart" },
   });
   return address;
+}
+
+/**
+ * Per-company secret vault (§6 step 2: "create Infisical project + machine
+ * identity"). Provisions the company's folder so the owner can store keys
+ * (Stripe, BYO enrichment) that capability providers resolve at runtime.
+ * Idempotent (folder creation swallows "already exists"); optional in dev
+ * (no INFISICAL_URL → secrets resolve from env instead).
+ */
+export async function provisionSecrets(companyId: string): Promise<boolean> {
+  const cfg = infisicalEnv();
+  if (!cfg) return false; // optional in dev
+  const admin = new InfisicalAdmin(new InfisicalClient(cfg));
+  await admin.ensureCompanyFolder(companyId);
+  await ledger.append({
+    companyId,
+    actor: "system",
+    eventType: "secrets_provisioned",
+    payload: { backend: "infisical", path: `/companies/${companyId}` },
+  });
+  return true;
 }
 
 export async function createUmamiSite(slug: string, name: string): Promise<string | null> {
