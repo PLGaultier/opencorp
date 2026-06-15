@@ -17,6 +17,7 @@ import {
   applyCeoPlan,
   ceoCompany,
   ensureDepartmentAgents,
+  expireStaleApprovals,
   gatherCeoContext,
   loadCeoPrompt,
   loadDepartmentPrompt,
@@ -194,6 +195,9 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
   // unread-inbox digest. Best effort — a mail-server hiccup never blocks the
   // heartbeat (the digest then reads the existing mirror).
   await syncInboxFromEnv(sql, ledger, companyId).catch(() => {});
+  // §7.3: clear approvals the owner never acted on, so the queue the CEO sees is
+  // live and the loop isn't waiting on dead requests.
+  await expireStaleApprovals(sql, ledger).catch(() => {});
   const ctx = await gatherCeoContext(sql, company);
   const { system, hash } = loadCeoPrompt(company);
 
@@ -267,7 +271,14 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
       ...(tracer?.publicUrl(traceId) ? { traceUrl: tracer.publicUrl(traceId) } : {}),
     },
   });
-  return { userBrief: plan.user_brief };
+  // Guarantee the owner is told about pending approvals even when the LLM brief
+  // omitted them — the human-in-the-loop only works if the human is pulled in.
+  const pending = ctx.pendingApprovals?.length ?? 0;
+  const userBrief =
+    pending && !/await/i.test(plan.user_brief)
+      ? `${plan.user_brief} · ⚠ ${pending} action(s) await your approval`
+      : plan.user_brief;
+  return { userBrief };
 }
 
 export interface DispatchDecision {

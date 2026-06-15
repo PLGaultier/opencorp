@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@opencorp/agentd": "workspace:*",
+    "@opencorp/llm": "workspace:*",
     "@opencorp/sandboxd": "workspace:*",
     "@opencorp/workflows": "workspace:*"
   }

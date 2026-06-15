@@ -15,6 +15,7 @@ export {
   applyCeoPlan,
   ceoCompany,
   ensureDepartmentAgents,
+  expireStaleApprovals,
   gatherCeoContext,
   loadCeoPrompt,
   loadDepartmentPrompt,

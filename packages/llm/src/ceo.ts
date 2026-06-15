@@ -41,6 +41,10 @@ export interface CeoContext {
   recentReports: { title: string; status: string; summary: string | null }[];
   revenueCents24h: number;
   unreadEmails: { from: string; subject: string }[];
+  /** Gated actions waiting on the owner (§7.3) — the CEO can't approve them. */
+  pendingApprovals?: { server: string; tool: string }[];
+  /** Tools the owner recently rejected; the CEO should not keep re-proposing. */
+  recentlyRejected?: string[];
 }
 
 /** §5.4 — the prompt hash recorded in ledger events for reproducibility. */
@@ -59,6 +63,12 @@ const contextBlock = (ctx: CeoContext): string =>
     `Unread inbox:\n${
       ctx.unreadEmails.map((e) => `- ${e.from}: ${e.subject}`).join("\n") || "- empty"
     }`,
+    `Actions awaiting the owner's approval (you cannot approve these — flag them in the brief):\n${
+      (ctx.pendingApprovals ?? []).map((a) => `- ${a.server}.${a.tool}`).join("\n") || "- none"
+    }`,
+    ...(ctx.recentlyRejected?.length
+      ? [`Recently rejected by the owner (do not re-propose): ${ctx.recentlyRejected.join(", ")}`]
+      : []),
   ].join("\n");
 
 /** Department proposals rendered for the CEO synthesis prompt (§14 M5). */
@@ -178,6 +188,7 @@ export function fallbackPlan(ctx: CeoContext, departmentReports: DepartmentRepor
     user_brief:
       `Balance ${ctx.creditBalance} credits · €${(ctx.revenueCents24h / 100).toFixed(2)} revenue last 24h · ` +
       `${ctx.queuedTasks + newTasks.length} task(s) queued · ${ctx.unreadEmails.length} unread email(s)` +
+      ((ctx.pendingApprovals?.length ?? 0) ? ` · ⚠ ${ctx.pendingApprovals!.length} action(s) await your approval` : "") +
       (failed.length ? ` · ${failed.length} failed task(s) need attention` : "") +
       (departmentReports.length
         ? ` · Departments: ${departmentReports.map((r) => `${r.department.toUpperCase()} — ${r.headline}`).join(" / ")}`

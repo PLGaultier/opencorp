@@ -93,7 +93,7 @@ export async function ceoCompany(sql: Sql, companyId: string): Promise<CeoCompan
 
 /** §5.2 step 1 — mission, last reports, revenue delta, inbox digest, balance, caps. */
 export async function gatherCeoContext(sql: Sql, company: CeoCompany): Promise<CeoContext> {
-  const [reports, [balance], [revenue], emails, [queued]] = await Promise.all([
+  const [reports, [balance], [revenue], emails, [queued], pending, rejected] = await Promise.all([
     sql<{ title: string; status: string; summary: string | null }[]>`
       SELECT title, status, COALESCE(result_summary, error) AS summary FROM tasks
       WHERE company_id = ${company.id} AND status IN ('done', 'failed')
@@ -110,6 +110,16 @@ export async function gatherCeoContext(sql: Sql, company: CeoCompany): Promise<C
       ORDER BY created_at DESC LIMIT 5`,
     sql<{ n: string }[]>`
       SELECT count(*) AS n FROM tasks WHERE company_id = ${company.id} AND status = 'queued'`,
+    sql<{ server: string; tool: string }[]>`
+      SELECT server, tool FROM approvals
+      WHERE company_id = ${company.id} AND status = 'pending'
+      ORDER BY created_at LIMIT 10`,
+    // owner rejections only (decided_by set) — expired ones aren't a signal
+    sql<{ tool: string }[]>`
+      SELECT DISTINCT tool FROM approvals
+      WHERE company_id = ${company.id} AND status = 'rejected'
+        AND decided_by IS NOT NULL AND decided_at > now() - interval '48 hours'
+      LIMIT 10`,
   ]);
   return {
     company: { name: company.name, mission: company.mission },
@@ -119,7 +129,35 @@ export async function gatherCeoContext(sql: Sql, company: CeoCompany): Promise<C
     recentReports: reports,
     revenueCents24h: Number(revenue!.n),
     unreadEmails: emails.map((e) => ({ from: e.from_addr, subject: e.subject })),
+    pendingApprovals: pending.map((a) => ({ server: a.server, tool: a.tool })),
+    recentlyRejected: rejected.map((r) => r.tool),
   };
+}
+
+/**
+ * Auto-expire approvals that have sat pending too long (§7.3). Keeps the queue
+ * from accumulating forever and stops the autonomous loop from waiting on an
+ * owner who never responds — an expired request is recorded as a system
+ * rejection on the ledger. Run once per heartbeat.
+ */
+export async function expireStaleApprovals(
+  sql: Sql,
+  ledger: Ledger,
+  ttlHours = Number(process.env.APPROVAL_TTL_HOURS ?? 168),
+): Promise<number> {
+  const stale = await sql<{ id: string; company_id: string; server: string; tool: string }[]>`
+    UPDATE approvals SET status = 'rejected', error = 'expired', decided_at = now()
+    WHERE status = 'pending' AND created_at < now() - make_interval(hours => ${ttlHours})
+    RETURNING id, company_id, server, tool`;
+  for (const a of stale) {
+    await ledger.append({
+      companyId: a.company_id,
+      actor: "system",
+      eventType: "approval_resolved",
+      payload: { approvalId: a.id, server: a.server, tool: a.tool, decision: "rejected", reason: "expired" },
+    });
+  }
+  return stale.length;
 }
 
 /**

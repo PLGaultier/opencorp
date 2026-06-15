@@ -37,6 +37,19 @@ describe("CEO planning (§5.2)", () => {
     expect(fallbackPlan({ ...ctx, queuedTasks: 2 }).new_tasks).toHaveLength(0);
   });
 
+  test("brief flags pending approvals so the owner is pulled in (§7.3)", () => {
+    const plain = fallbackPlan(ctx);
+    expect(plain.user_brief).not.toContain("await your approval");
+    const withApprovals = fallbackPlan({
+      ...ctx,
+      pendingApprovals: [
+        { server: "payments", tool: "delete_product" },
+        { server: "web", tool: "set_custom_domain" },
+      ],
+    });
+    expect(withApprovals.user_brief).toContain("2 action(s) await your approval");
+  });
+
   test("planHeartbeat without llm config uses the fallback", async () => {
     const plan = await planHeartbeat(null, "system", ctx);
     expect(plan.user_brief).toContain("no LLM configured");
