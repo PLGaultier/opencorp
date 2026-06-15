@@ -1,6 +1,8 @@
 import type postgres from "postgres";
 import type { Ledger } from "@opencorp/ledgerd";
 import { registry, type ToolContext } from "./tools";
+import type { SecretStore } from "./secrets";
+import { emailFor, listUnsubscribeHeader } from "./providers/email";
 
 /**
  * Human-in-the-loop approvals (§7.3, §15). A gated tool call by an agent on a
@@ -50,6 +52,54 @@ export async function requestApproval(
     },
   });
   return { approvalId: row!.id, reused: false };
+}
+
+/**
+ * Pull the owner in out-of-band (§7.3): email them the moment an action is
+ * parked, from the company's own mailbox to their account email, via Stalwart.
+ * Best effort and self-degrading — no owner email, no company mailbox, or no
+ * mail server configured ⇒ a no-op (the in-app brief + dashboard still surface
+ * it). Records an `approval_notified` ledger event when an email goes out.
+ */
+export async function notifyOwnerOfApproval(
+  sql: postgres.Sql,
+  ledger: Ledger,
+  secrets: SecretStore,
+  input: { companyId: string; approvalId: string; server: string; tool: string },
+): Promise<{ notified: boolean; reason?: string }> {
+  const [row] = await sql<
+    { company_name: string; email_address: string | null; slug: string; owner_email: string | null }[]
+  >`
+    SELECT c.name AS company_name, c.email_address, c.slug, u.email AS owner_email
+    FROM companies c
+    JOIN conglomerates g ON g.id = c.conglomerate_id
+    LEFT JOIN "user" u ON u.id = g.owner_user_id
+    WHERE c.id = ${input.companyId}`;
+  if (!row?.owner_email) return { notified: false, reason: "no_owner_email" };
+  if (!row.email_address) return { notified: false, reason: "no_mailbox" };
+
+  const provider = await emailFor(input.companyId, secrets, row.email_address);
+  if (provider.kind !== "stalwart") return { notified: false, reason: "email_not_configured" };
+
+  const dashUrl = `${(process.env.DASHBOARD_URL ?? "https://opencorp.app").replace(/\/$/, "")}/c/${row.slug}`;
+  await provider.send({
+    from: row.email_address,
+    to: [row.owner_email],
+    subject: `Approval needed — ${row.company_name} wants to run ${input.tool}`,
+    text:
+      `Your autonomous company ${row.company_name} wants to run an irreversible action:\n\n` +
+      `    ${input.server}.${input.tool}\n\n` +
+      `It is paused, awaiting your decision. Approve or reject it from the dashboard:\n${dashUrl}\n\n` +
+      `If you do nothing, the request expires and is treated as rejected.\n\n— OpenCorp`,
+    headers: listUnsubscribeHeader(row.email_address),
+  });
+  await ledger.append({
+    companyId: input.companyId,
+    actor: "system",
+    eventType: "approval_notified",
+    payload: { approvalId: input.approvalId, server: input.server, tool: input.tool, channel: "email" },
+  });
+  return { notified: true };
 }
 
 export type ApprovalDecision = "approve" | "reject";

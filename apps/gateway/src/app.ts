@@ -10,7 +10,7 @@ import { secretStoreFromEnv, infisicalEnv, InfisicalClient, InfisicalAdmin } fro
 import { FetchBrowser } from "./providers/browser";
 import { recordPayment } from "./revenue";
 import { processWithdrawal } from "./payout";
-import { requestApproval, resolveApproval } from "./approvals";
+import { requestApproval, resolveApproval, notifyOwnerOfApproval } from "./approvals";
 
 /**
  * MCP tool gateway (§7): every capability call from agents terminates here.
@@ -104,13 +104,24 @@ export function createGateway(opts?: {
       const [comp] = await sql<{ autonomy_level: string }[]>`
         SELECT autonomy_level FROM companies WHERE id = ${scope.companyId}`;
       if (comp?.autonomy_level !== "full") {
-        const { approvalId } = await requestApproval(sql, ledger, {
+        const { approvalId, reused } = await requestApproval(sql, ledger, {
           companyId: scope.companyId,
           taskId: scope.taskId,
           server,
           tool,
           args: parsed.data,
         });
+        // Email the owner out-of-band the first time an action is parked (a
+        // retry reuses the request, so it doesn't re-notify). Never blocks the
+        // agent's response.
+        if (!reused) {
+          await notifyOwnerOfApproval(sql, ledger, secrets, {
+            companyId: scope.companyId,
+            approvalId,
+            server,
+            tool,
+          }).catch(() => {});
+        }
         return c.json(
           {
             error: "approval_required",
