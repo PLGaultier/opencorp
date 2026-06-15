@@ -20,6 +20,7 @@ export interface Company {
   dailyTaskCap: number;
   autonomyLevel: "supervised" | "bounded" | "full";
   isPublic: boolean;
+  emailAddress?: string | null;
 }
 
 export interface LedgerEvent {

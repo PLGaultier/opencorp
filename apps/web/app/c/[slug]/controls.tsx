@@ -16,6 +16,15 @@ interface ScheduleInfo {
   recentRuns: number;
 }
 
+interface Approval {
+  id: string;
+  server: string;
+  tool: string;
+  args: Record<string, unknown>;
+  status: string;
+  createdAt: string;
+}
+
 export function CompanyControls({
   companyId,
   initialStatus,
@@ -25,6 +34,8 @@ export function CompanyControls({
 }) {
   const [status, setStatus] = useState(initialStatus);
   const [schedule, setSchedule] = useState<ScheduleInfo | null | "none">(null);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [resolving, setResolving] = useState<string | null>(null);
   const [hbRunning, setHbRunning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [chat, setChat] = useState<{ role: "owner" | "ceo"; text: string }[]>([]);
@@ -55,7 +66,33 @@ export function CompanyControls({
     }
   }, [api]);
 
+  const loadApprovals = useCallback(async () => {
+    if (!API_URL) return;
+    try {
+      const res = await api("/approvals?status=pending");
+      if (res.ok) setApprovals(((await res.json()) as { approvals: Approval[] }).approvals);
+    } catch {
+      /* leave the list as-is */
+    }
+  }, [api]);
+
   useEffect(() => void loadSchedule(), [loadSchedule]);
+  useEffect(() => void loadApprovals(), [loadApprovals]);
+
+  const resolveApproval = async (id: string, decision: "approve" | "reject") => {
+    setResolving(id);
+    try {
+      await api(`/approvals/${id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision }),
+      });
+      // optimistic: drop it from the pending list (result streams to the terminal)
+      setApprovals((list) => list.filter((a) => a.id !== id));
+    } finally {
+      setResolving(null);
+    }
+  };
 
   const runHeartbeat = async () => {
     setHbRunning(true);
@@ -125,6 +162,12 @@ export function CompanyControls({
     );
   }
 
+  function summarizeArgs(args: Record<string, unknown>): string {
+    return Object.entries(args)
+      .map(([k, v]) => `${k}: ${typeof v === "string" ? v.slice(0, 40) : JSON.stringify(v)}`)
+      .join(", ");
+  }
+
   if (needsAuth) {
     return (
       <div className="controls">
@@ -172,6 +215,33 @@ export function CompanyControls({
           )}
         </span>
       </div>
+
+      {approvals.length > 0 && (
+        <div className="approvals">
+          <div className="sub" style={{ margin: "0 0 .4rem" }}>
+            ⚠ {approvals.length} action(s) await your approval (§7.3 — irreversible / money-out)
+          </div>
+          {approvals.map((a) => (
+            <div key={a.id} className="approval-row">
+              <code className="approval-tool">
+                {a.server}.{a.tool}({summarizeArgs(a.args)})
+              </code>
+              <div className="controls-row" style={{ marginLeft: "auto", gap: ".4rem" }}>
+                <button
+                  className="btn primary"
+                  onClick={() => resolveApproval(a.id, "approve")}
+                  disabled={resolving === a.id}
+                >
+                  Approve
+                </button>
+                <button className="btn" onClick={() => resolveApproval(a.id, "reject")} disabled={resolving === a.id}>
+                  Reject
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="chat">
         {chat.map((m, i) => (

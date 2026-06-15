@@ -10,6 +10,7 @@ import { secretStoreFromEnv, infisicalEnv, InfisicalClient, InfisicalAdmin } fro
 import { FetchBrowser } from "./providers/browser";
 import { recordPayment } from "./revenue";
 import { processWithdrawal } from "./payout";
+import { requestApproval, resolveApproval } from "./approvals";
 
 /**
  * MCP tool gateway (§7): every capability call from agents terminates here.
@@ -54,6 +55,20 @@ export function createGateway(opts?: {
     return db;
   }
 
+  // Build a tool execution context. Shared by the live /tools route and the
+  // approval-resolution route (which re-runs a gated handler on owner approval).
+  const buildCtx = (companyId: string, taskId: string): ToolContext => ({
+    sql,
+    companyId,
+    taskId,
+    companyDb,
+    deploydUrl: opts?.deploydUrl ?? process.env.DEPLOYD_URL ?? "http://localhost:3002",
+    ledger,
+    secrets,
+    checkoutBase,
+    browser,
+  });
+
   const app = new Hono();
 
   app.get("/healthz", (c) => c.json({ ok: true, service: "mcp-gateway" }));
@@ -77,45 +92,38 @@ export function createGateway(opts?: {
       return c.json(limited, 429);
     }
 
-    // Safety gate (§7.3): irreversible / money-out tools need autonomy_level=full
-    // (or a human approval signal, which lands with the dashboard in M4).
+    const parsed = def.schema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+    }
+
+    // Safety gate (§7.3): irreversible / money-out tools below autonomy_level=
+    // full don't execute — they park as a pending approval and the agent moves
+    // on. An owner approves it later (the gateway then runs the handler).
     if (def.gated) {
       const [comp] = await sql<{ autonomy_level: string }[]>`
         SELECT autonomy_level FROM companies WHERE id = ${scope.companyId}`;
       if (comp?.autonomy_level !== "full") {
-        await ledger.append({
+        const { approvalId } = await requestApproval(sql, ledger, {
           companyId: scope.companyId,
-          actor: `worker:${scope.taskId}`,
-          eventType: "tool_call",
-          payload: { server, tool, outcome: "approval_required" },
+          taskId: scope.taskId,
+          server,
+          tool,
+          args: parsed.data,
         });
         return c.json(
           {
             error: "approval_required",
             tool,
-            message: `${tool} is an irreversible action; it requires human approval unless autonomy_level=full.`,
+            approvalId,
+            message: `${tool} is an irreversible action; it awaits human approval (id ${approvalId}). Do not wait; move on.`,
           },
           403,
         );
       }
     }
 
-    const parsed = def.schema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
-    }
-
-    const ctx: ToolContext = {
-      sql,
-      companyId: scope.companyId,
-      taskId: scope.taskId,
-      companyDb,
-      deploydUrl: opts?.deploydUrl ?? process.env.DEPLOYD_URL ?? "http://localhost:3002",
-      ledger,
-      secrets,
-      checkoutBase,
-      browser,
-    };
+    const ctx = buildCtx(scope.companyId, scope.taskId);
 
     // Keep heavy/sensitive inputs (file contents, long commands) off the ledger.
     const auditArgs = def.summarizeArgs ? def.summarizeArgs(parsed.data as never) : parsed.data;
@@ -227,6 +235,27 @@ export function createGateway(opts?: {
       payload: { key: parsed.data.key, value: "[redacted]" },
     });
     return c.json({ ok: true, key: parsed.data.key });
+  });
+
+  // Resolve a pending approval (§7.3). Owner-initiated from the dashboard; the
+  // API authenticates the owner and forwards here, signed by the platform like
+  // the other admin routes. Approve runs the stored handler gateway-side.
+  const ApprovalResolveBody = z.object({
+    decision: z.enum(["approve", "reject"]),
+    decidedBy: z.string().optional(),
+  });
+
+  app.post("/admin/approvals/:id/resolve", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
+    const parsed = ApprovalResolveBody.safeParse(JSON.parse(raw || "{}"));
+    if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+    const out = await resolveApproval(sql, ledger, buildCtx, {
+      id: c.req.param("id"),
+      ...parsed.data,
+    });
+    if ("error" in out && out.error === "not_found") return c.json(out, 404);
+    return c.json(out);
   });
 
   return { app, sql, ledger };

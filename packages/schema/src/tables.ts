@@ -52,6 +52,7 @@ export const withdrawalStatus = pgEnum("withdrawal_status", [
 ]);
 export const planId = pgEnum("plan_id", ["free", "builder", "pro"]);
 export const subscriptionStatus = pgEnum("subscription_status", ["active", "canceled"]);
+export const approvalStatus = pgEnum("approval_status", ["pending", "approved", "rejected"]);
 
 // ── Auth (Better Auth core tables; §3 — orgs = conglomerates) ──────────────
 // Field names/shapes are what better-auth's drizzle adapter expects. Text PKs
@@ -305,3 +306,28 @@ export const withdrawals = pgTable("withdrawals", {
   status: withdrawalStatus("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Human-in-the-loop approvals (§7.3, §15). A gated tool call by an agent on a
+// company below autonomy_level=full parks here as 'pending'; an owner approves
+// (the gateway then executes the stored action) or rejects it. The agent never
+// blocks — it sees approval_required and moves on.
+export const approvals = pgTable(
+  "approvals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id),
+    taskId: uuid("task_id"), // requesting task (null for non-task-scoped requests)
+    server: text("server").notNull(),
+    tool: text("tool").notNull(),
+    args: jsonb("args").notNull(), // the pending action's validated input
+    status: approvalStatus("status").notNull().default("pending"),
+    decidedBy: text("decided_by"), // user.id of the resolver
+    result: jsonb("result"), // handler output once approved + executed
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+  },
+  (t) => [index("approvals_company_status_idx").on(t.companyId, t.status)],
+);

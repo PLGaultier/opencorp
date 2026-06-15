@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
@@ -34,6 +35,24 @@ const databaseUrl =
 const store = new PgStore(databaseUrl);
 const ledger = new Ledger(store);
 const sql = postgres(databaseUrl, { max: 5 });
+
+const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3004";
+const GATEWAY_SECRET = process.env.GATEWAY_SECRET ?? "dev-gateway-secret";
+
+/** Call a platform-signed gateway admin route (same HMAC scheme as withdraw). */
+async function gatewaySignedPost(
+  path: string,
+  body: unknown,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const raw = JSON.stringify(body);
+  const sig = createHmac("sha256", GATEWAY_SECRET).update(raw).digest("hex");
+  const res = await fetch(`${GATEWAY_URL}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-opencorp-sig": sig },
+    body: raw,
+  });
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+}
 
 const app = new Hono<{ Variables: { userId: string } }>();
 
@@ -617,6 +636,45 @@ app.post("/companies/:id/withdraw", requireAuth, requireCompanyAccess, async (c)
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 422);
   }
+});
+
+// §7.3 — pending/recent approvals for owner review (human-in-the-loop).
+app.get("/companies/:id/approvals", requireAuth, requireCompanyAccess, async (c) => {
+  const status = c.req.query("status");
+  const rows = await sql<
+    { id: string; server: string; tool: string; args: unknown; status: string; decided_by: string | null; error: string | null; created_at: string; decided_at: string | null }[]
+  >`SELECT id, server, tool, args, status, decided_by, error, created_at, decided_at
+    FROM approvals WHERE company_id = ${c.req.param("id")}
+    ${status ? sql`AND status = ${status}` : sql``}
+    ORDER BY created_at DESC LIMIT 100`;
+  return c.json({
+    approvals: rows.map((r) => ({
+      id: r.id,
+      server: r.server,
+      tool: r.tool,
+      args: r.args,
+      status: r.status,
+      decidedBy: r.decided_by,
+      error: r.error,
+      createdAt: r.created_at,
+      decidedAt: r.decided_at,
+    })),
+  });
+});
+
+// §7.3 — approve/reject a gated action; the gateway executes it on approval.
+app.post("/companies/:id/approvals/:approvalId", requireAuth, requireCompanyAccess, async (c) => {
+  const body = z.object({ decision: z.enum(["approve", "reject"]) }).safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  const approvalId = c.req.param("approvalId");
+  const [a] = await sql<{ id: string }[]>`
+    SELECT id FROM approvals WHERE id = ${approvalId} AND company_id = ${c.req.param("id")}`;
+  if (!a) return c.json({ error: "not_found" }, 404);
+  const { status, body: out } = await gatewaySignedPost(`/admin/approvals/${approvalId}/resolve`, {
+    decision: body.data.decision,
+    decidedBy: c.get("userId"),
+  });
+  return c.json(out, status as 200);
 });
 
 // Credit dashboard — balance, breakdown by reason, recent entries, current plan.
