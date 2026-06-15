@@ -2,6 +2,7 @@ import { z } from "zod";
 import { chat, llmConfigFromEnv, tracerFromEnv } from "@opencorp/llm";
 import { callTool } from "@opencorp/mcp-client";
 import { scriptedPolicy } from "./scripted";
+import { CodeRunner, type CodeToolName } from "./code";
 import type { WorkerSpec } from "./spec";
 
 /**
@@ -37,6 +38,7 @@ Tools (call via {"server": "...", "tool": "...", "args": {...}}):
 - docs: create_document, update_document, list_documents, read_document, search_documents
 - db: get_schema, run_sql, execute_sql
 - web: deploy_site (args: {files: {"index.html": "..."}}) , get_deploy_status
+- code: exec (args: {command}), write_file (args: {path, content}), read_file (args: {path}), list_files (args: {dir?}), git_commit_push (args: {message}) — runs in your own Linux sandbox workspace; build and run real software here
 - payments: create_product (args: {name, priceCents, currency}), get_payment_link (args: {productId}), list_products, get_revenue
 - email: send_email (args: {to:[...], subject, body}), reply_email, list_emails, read_email
 - browser: navigate (args: {url}), extract (args: {url})
@@ -58,6 +60,7 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
   const maxSteps = input.budgets?.maxSteps ?? 80;
   const deadline = Date.now() + (input.budgets?.maxWallClockMs ?? 30 * 60_000);
   const tracer = input.traceId ? tracerFromEnv() : null;
+  const code = codeRunnerFor(input);
   const transcript: string[] = [
     `Task: ${input.task.title}\n${input.task.description}\nCompany: ${input.company.name} — mission: ${input.company.mission}`,
   ];
@@ -86,13 +89,7 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
         return { summary: action.final, steps: n };
       }
       input.onStep?.({ n, thought, tool: `${action.server}.${action.tool}` });
-      const result = await callTool(
-        input.gatewayUrl,
-        input.token,
-        action.server,
-        action.tool,
-        action.args,
-      );
+      const result = await dispatchTool(input, code, action.server, action.tool, action.args);
       transcript.push(
         `Step ${n}: called ${action.server}.${action.tool}\nResult: ${JSON.stringify(result).slice(0, 4000)}`,
       );
@@ -100,6 +97,41 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
     throw new Error("step_budget_exceeded");
   } finally {
     await tracer?.flush(); // ship the trace even when the task fails (§9.2)
+  }
+}
+
+/** A CodeRunner bound to this task's sandbox workspace (§7.1 code-mcp). */
+export function codeRunnerFor(input: WorkerTaskInput): CodeRunner {
+  return new CodeRunner({
+    workspace: input.workspace,
+    taskId: input.task.id,
+    gitRemote: input.repo?.pushUrl,
+    gitBranch: input.repo?.branch,
+  });
+}
+
+/**
+ * Route one tool call. `code.*` runs inside this sandbox, but only after the
+ * gateway authorizes it (token scope + rate limit + safety gate + audit, §7) —
+ * the same choke point as every other tool. Everything else is a plain
+ * gateway-side MCP call.
+ */
+export async function dispatchTool(
+  input: WorkerTaskInput,
+  code: CodeRunner,
+  server: string,
+  tool: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  if (server !== "code") {
+    return callTool(input.gatewayUrl, input.token, server, tool, args);
+  }
+  const authz = await callTool(input.gatewayUrl, input.token, "code", tool, args);
+  if (!authz.ok) return authz; // rate_limited / approval_required / invalid_input — do not execute
+  try {
+    return await code.run(tool as CodeToolName, args);
+  } catch (err) {
+    return { ok: false, error: "code_tool_failed", message: err instanceof Error ? err.message : String(err) };
   }
 }
 

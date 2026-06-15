@@ -32,6 +32,14 @@ export interface ToolDef {
   write: boolean;
   /** Irreversible / money-out action: requires autonomy_level=full (§7.3). */
   gated?: boolean;
+  /**
+   * Executed inside the worker's own sandbox, not here (§7.1 code-mcp). The
+   * gateway still authorizes + rate-limits + audits the call; the handler only
+   * grants permission and agentd runs it locally.
+   */
+  local?: boolean;
+  /** Shrink the audited args (e.g. drop file contents from the ledger, §9.3). */
+  summarizeArgs?: (args: never) => unknown;
   handler: (ctx: ToolContext, args: never) => Promise<unknown>;
 }
 
@@ -549,6 +557,56 @@ export const registry: Registry = {
           SELECT reason, COALESCE(SUM(delta),0) AS total, count(*) AS n
           FROM credit_entries WHERE company_id = ${ctx.companyId}
           GROUP BY reason`;
+      },
+    },
+  },
+
+  // ── code-mcp (§7.1) ───────────────────────────────────────────────────────
+  // These run inside the worker's sandbox (agentd, §8), not here. The gateway
+  // authorizes + rate-limits + audits each call (handlers just grant); agentd
+  // executes against the sandbox filesystem/shell. `summarizeArgs` keeps file
+  // contents and full command output off the public ledger (§9.3).
+  code: {
+    exec: {
+      schema: z.object({ command: z.string().min(1).max(16_000), timeoutMs: z.number().int().positive().optional() }),
+      write: true,
+      local: true,
+      summarizeArgs: (a: { command: string }) => ({ command: a.command.slice(0, 500) }),
+      async handler() {
+        return { authorized: true };
+      },
+    },
+    write_file: {
+      schema: z.object({ path: z.string().min(1).max(1024), content: z.string().max(1_000_000) }),
+      write: true,
+      local: true,
+      summarizeArgs: (a: { path: string; content: string }) => ({ path: a.path, bytes: a.content.length }),
+      async handler() {
+        return { authorized: true };
+      },
+    },
+    read_file: {
+      schema: z.object({ path: z.string().min(1).max(1024) }),
+      write: false,
+      local: true,
+      async handler() {
+        return { authorized: true };
+      },
+    },
+    list_files: {
+      schema: z.object({ dir: z.string().max(1024).optional() }),
+      write: false,
+      local: true,
+      async handler() {
+        return { authorized: true };
+      },
+    },
+    git_commit_push: {
+      schema: z.object({ message: z.string().min(1).max(500) }),
+      write: true,
+      local: true,
+      async handler() {
+        return { authorized: true };
       },
     },
   },

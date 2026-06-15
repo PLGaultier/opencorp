@@ -20,6 +20,10 @@ export const WorkerSpecSchema = z.object({
   traceId: z.string().optional(),
   /** Curated env injected into the sandbox (LLM endpoint, etc.); secrets arrive via Infisical. */
   env: z.record(z.string()).optional(),
+  /** code-mcp workspace root (§7.1); defaults to a per-task dir in the sandbox. */
+  workspace: z.string().optional(),
+  /** Authenticated git remote for code.git_commit_push (Forgejo deploy URL, §5.3). */
+  repo: z.object({ pushUrl: z.string(), branch: z.string().optional() }).optional(),
 });
 
 export type WorkerSpec = z.infer<typeof WorkerSpecSchema>;

@@ -28,6 +28,11 @@ export const DEFAULT_LIMITS: Record<string, ToolLimits> = {
   update_mission: { hour: 2, day: 5 },
   create_task: { hour: 20, day: 60 },
   update_task: { hour: 30, day: 100 },
+  // code-mcp (§7.1): generous — coding is iterative — but bounded so a runaway
+  // loop can't hammer the sandbox indefinitely (the task budgets cap it too).
+  exec: { hour: 200, day: 1000 },
+  write_file: { hour: 200, day: 1000 },
+  git_commit_push: { hour: 30, day: 150 },
 };
 
 export interface RateLimitError {

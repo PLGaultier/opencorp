@@ -117,13 +117,15 @@ export function createGateway(opts?: {
       browser,
     };
 
+    // Keep heavy/sensitive inputs (file contents, long commands) off the ledger.
+    const auditArgs = def.summarizeArgs ? def.summarizeArgs(parsed.data as never) : parsed.data;
     try {
       const result = await def.handler(ctx, parsed.data as never);
       await ledger.append({
         companyId: scope.companyId,
         actor: `worker:${scope.taskId}`,
         eventType: "tool_call",
-        payload: { server, tool, args: parsed.data, outcome: "ok" },
+        payload: { server, tool, args: auditArgs, outcome: "ok" },
       });
       return c.json(result ?? {});
     } catch (err) {
@@ -132,7 +134,7 @@ export function createGateway(opts?: {
         companyId: scope.companyId,
         actor: `worker:${scope.taskId}`,
         eventType: "tool_call",
-        payload: { server, tool, args: parsed.data, outcome: "error", message },
+        payload: { server, tool, args: auditArgs, outcome: "error", message },
       });
       return c.json({ error: "tool_failed", message }, 500);
     }

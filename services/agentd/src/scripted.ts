@@ -1,4 +1,5 @@
 import { callTool } from "@opencorp/mcp-client";
+import { CodeRunner } from "./code";
 import type { WorkerTaskInput, WorkerTaskResult } from "./loop";
 
 /**
@@ -14,6 +15,40 @@ export async function scriptedPolicy(input: WorkerTaskInput): Promise<WorkerTask
 
   if (input.task.title.toLowerCase().includes("[fail]")) {
     throw new Error("scripted failure (testing auto-refund)");
+  }
+
+  // code-mcp flow (§7.1): build and run real software in the sandbox. Each code
+  // tool is authorized + audited by the gateway, then executed in-sandbox.
+  if (/\bcode\b|\bscript\b|\bprogram\b|automation/i.test(input.task.title)) {
+    const code = new CodeRunner({ workspace: input.workspace, taskId: input.task.id });
+    const runCode = async (tool: string, args: Record<string, unknown>) => {
+      const authz = await call("code", tool, args);
+      if (!authz.ok) throw new Error(`code.${tool} denied: ${JSON.stringify(authz)}`);
+      return code.run(tool as never, args);
+    };
+
+    input.onStep?.({ n: 1, thought: "Writing a build script", tool: "code.write_file" });
+    await runCode("write_file", {
+      path: "build.sh",
+      content: '#!/usr/bin/env bash\necho "OpenCorp worker built this"\nseq 1 5 | paste -sd+ - | bc\n',
+    });
+
+    input.onStep?.({ n: 2, thought: "Running it in the sandbox", tool: "code.exec" });
+    const out = (await runCode("exec", { command: "bash build.sh" })) as { stdout?: string; exitCode?: number };
+
+    input.onStep?.({ n: 3, thought: "Committing the work", tool: "code.git_commit_push" });
+    await runCode("git_commit_push", { message: `Add build script for ${input.task.title}` });
+
+    input.onStep?.({ n: 4, thought: "Filing a report", tool: "docs.create_document" });
+    await call("docs", "create_document", {
+      title: `Build report: ${input.task.title}`,
+      content: `Ran build.sh in the sandbox (exit ${out.exitCode}). Output:\n${out.stdout ?? ""}`,
+    });
+
+    return {
+      summary: `Wrote build.sh, ran it in the sandbox (output: ${(out.stdout ?? "").trim().replace(/\n/g, " ")}), committed, and reported.`,
+      steps: 4,
+    };
   }
 
   input.onStep?.({ n: 1, thought: "Reading mission for context", tool: "org.read_mission" });
