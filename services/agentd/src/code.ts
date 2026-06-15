@@ -1,5 +1,7 @@
 import { mkdir, readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import type { EventEmitter } from "node:events";
 import path from "node:path";
 import os from "node:os";
 
@@ -76,33 +78,14 @@ export class CodeRunner {
 
   private async exec(command: string, timeoutMs?: number): Promise<Record<string, unknown>> {
     const timeout = Math.min(timeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS, MAX_EXEC_TIMEOUT_MS);
-    const proc = Bun.spawn({
-      cmd: ["bash", "-lc", command],
-      cwd: this.root,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      proc.kill(9);
-    }, timeout);
-    try {
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      const exitCode = await proc.exited;
-      return {
-        ok: !timedOut && exitCode === 0,
-        exitCode: timedOut ? null : exitCode,
-        timedOut,
-        stdout: cap(stdout),
-        stderr: cap(stderr),
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+    const r = await runProcess("bash", ["-lc", command], { cwd: this.root, timeoutMs: timeout });
+    return {
+      ok: !r.timedOut && r.exitCode === 0,
+      exitCode: r.timedOut ? null : r.exitCode,
+      timedOut: r.timedOut,
+      stdout: cap(r.stdout),
+      stderr: cap(r.stderr),
+    };
   }
 
   private async writeFile(p: string, content: string): Promise<Record<string, unknown>> {
@@ -164,16 +147,52 @@ export class CodeRunner {
   }
 
   private async git(argv: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-    const proc = Bun.spawn({ cmd: ["git", ...argv], cwd: this.root, stdout: "pipe", stderr: "pipe" });
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const code = await proc.exited;
-    return { ok: code === 0, stdout, stderr };
+    const r = await runProcess("git", argv, { cwd: this.root });
+    return { ok: r.exitCode === 0, stdout: r.stdout, stderr: r.stderr };
   }
 }
 
 function cap(s: string): string {
   return s.length > MAX_OUTPUT ? s.slice(0, MAX_OUTPUT) + `\n…[truncated ${s.length - MAX_OUTPUT} bytes]` : s;
+}
+
+/**
+ * Run a child process portably (node:child_process works under both Bun and the
+ * node/tsx Temporal worker — Bun.spawn does not exist under node). Captures
+ * stdout/stderr up to MAX_OUTPUT and kills on timeout.
+ */
+function runProcess(
+  cmd: string,
+  args: string[],
+  opts: { cwd: string; timeoutMs?: number },
+): Promise<{ exitCode: number | null; timedOut: boolean; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { cwd: opts.cwd });
+    // @types/bun's ChildProcess doesn't surface the EventEmitter methods; the
+    // runtime object is a real EventEmitter, so reach them through that type.
+    const events = child as unknown as EventEmitter;
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = opts.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, opts.timeoutMs)
+      : null;
+    child.stdout?.on("data", (d: Buffer) => {
+      if (stdout.length < MAX_OUTPUT) stdout += d.toString("utf8");
+    });
+    child.stderr?.on("data", (d: Buffer) => {
+      if (stderr.length < MAX_OUTPUT) stderr += d.toString("utf8");
+    });
+    events.once("error", (err: Error) => {
+      if (timer) clearTimeout(timer);
+      resolve({ exitCode: null, timedOut, stdout, stderr: `${stderr}${err}` });
+    });
+    events.once("close", (code: number | null) => {
+      if (timer) clearTimeout(timer);
+      resolve({ exitCode: code, timedOut, stdout, stderr });
+    });
+  });
 }

@@ -10,6 +10,8 @@
     "workflows"
   ],
   "scripts": {
+    "dev": "bun scripts/dev-up.ts",
+    "mvp:down": "docker compose -f infra/compose/docker-compose.mvp.yml down",
     "dev:api": "bun run --cwd apps/api dev",
     "test": "bun test",
     "ledger:verify": "bun run services/ledgerd/src/cli.ts verify",

@@ -1,9 +1,11 @@
 node_modules/
 .env
 .env.*
+!.env.example
 dist/
 *.tsbuildinfo
 .DS_Store
 .next/
 .vercel/
 next-env.d.ts
+.opencorp/

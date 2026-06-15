@@ -1,0 +1,66 @@
+name: opencorp-mvp
+
+# Minimal local MVP stack: the only infra containers OpenCorp actually needs to
+# run end-to-end on a laptop — Postgres (control DB + ledger + per-company DBs)
+# and Temporal (the durable workflow engine). The app processes (api, gateway,
+# worker, deployd, web) run on the host via `bun run dev` (scripts/dev-up.ts).
+#
+# Everything else from the full stack — Stalwart, Infisical, Forgejo, Umami,
+# Langfuse, Lago, MinIO, Valkey, E2B — is OFF: the app degrades to local/offline
+# modes when those aren't configured. Add them back only when you want the real
+# thing (see docker-compose.dev.yml).
+#
+#   docker compose -f infra/compose/docker-compose.mvp.yml up -d
+#   # add real AI (one API key in .env): ... --profile llm up -d
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: opencorp
+      POSTGRES_PASSWORD: opencorp
+      POSTGRES_DB: opencorp
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opencorp"]
+      interval: 3s
+      retries: 20
+
+  temporal:
+    image: temporalio/auto-setup:1.26
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: opencorp
+      POSTGRES_PWD: opencorp
+      POSTGRES_SEEDS: postgres
+    ports: ["7233:7233"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports: ["8233:8080"]
+    depends_on: [temporal]
+
+  # Optional: the LLM proxy. Off by default — start with `--profile llm` once
+  # ANTHROPIC_API_KEY is in .env. Without it, the worker runs the deterministic
+  # offline policy and the whole platform still works (just not "real AI").
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    profiles: ["llm"]
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ./litellm.config.yaml:/etc/litellm/config.yaml:ro
+    ports: ["4000:4000"]
+
+volumes:
+  pgdata:

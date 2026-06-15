@@ -3,7 +3,26 @@
 
 > **Audience:** This document is written as an instruction file for an implementing agent (e.g., Claude Code) and for human engineers. Every section contains concrete, opinionated technical decisions. When a choice is made, build that choice; alternatives are listed only as fallbacks.
 >
-> **Mission:** Reproduce the core idea behind NanoCorp (nanocorp.so) — *"autonomous companies run by AI"* — as a fully open-source, self-hostable platform with **radical transparency**: every agent decision, tool call, token spent, and cent earned is publicly auditable.
+> **Mission:** Reproduce the core idea behind NanoCorp (nanocorp.so) — *"autonomous companies run by AI"* — with **radical transparency**: every agent decision, tool call, token spent, and cent earned is auditable on a hash-chained ledger.
+
+---
+
+## 0. Current priority — local MVP (read this first)
+
+The **immediate goal is an MVP that runs on a single laptop with minimal external dependencies**, not a multi-tenant, internet-facing, self-hostable-by-others platform. Open-source distribution and full self-hosting (Helm, public domains, deliverability) are explicitly **deferred to a later phase**. Where this section conflicts with the rest of the spec, this section wins for now.
+
+**The MVP stack is three things:**
+1. **PostgreSQL** — control DB + ledger + per-company DBs (one container).
+2. **Temporal** — the durable workflow engine (one container).
+3. **One LLM** — a single API key (e.g. Anthropic Haiku) via LiteLLM, *or* a local model. This is the only irreducible external dependency; with no key the worker falls back to a deterministic offline policy and the platform still runs end-to-end.
+
+**Everything else is OFF by default and the app degrades to a local/offline mode** (already implemented as provider seams): E2B → `subprocess`/`local` pool (no cloud, no public URLs); Stripe → local checkout / `payments=none`; Infisical → env-var secrets; Stalwart → DB-mirror-only email; Forgejo, Umami, Langfuse, Lago, OpenMeter, MinIO, Valkey → unused. Turn any of them on later by setting its env vars.
+
+**Run it:** `cp .env.example .env` (optionally add one LLM key) → `bun run dev` (brings up infra, migrates, launches api + gateway + worker + deployd + web) → create a company from one prompt. Auth is disabled locally (single dev owner); never expose that build publicly.
+
+**MVP Definition of Done:** on one machine, `bun run dev` + one LLM key lets you type a prompt and get a company with a mission, a CEO that plans, autonomous worker tasks that write code / query the per-company DB / deploy a local site, and every action on a verifiable hash-chained ledger — with zero external accounts beyond the LLM.
+
+The sections below describe the **full production vision** (E2B, Stalwart, Stripe, Helm, etc.); treat them as the roadmap *after* the MVP, and read every "binding" external service as "optional, off in the MVP."
 
 ---
 
@@ -385,7 +404,11 @@ Credit and money ledgers are queryable per company: tokens → cost (from LiteLL
 
 ---
 
-## 12. Deployment Reference (Hetzner example)
+## 12. Deployment Reference
+
+**Local MVP (current default, §0):** no VMs, no Helm — `docker-compose.mvp.yml` (Postgres + Temporal, LiteLLM optional) + `bun run dev` (scripts/dev-up.ts) launches the app processes on the host. One LLM key, no other accounts. This is how the platform runs today.
+
+**Production (Hetzner example, later phase):**
 
 | Node | Spec | Runs | ~€/mo |
 |---|---|---|---|
@@ -459,6 +482,8 @@ opencorp/
 
 ---
 
-## 16. Definition of Done (v1)
+## 16. Definition of Done
 
-A fresh `helm install opencorp` on a handful of VMs, configured with one LLM endpoint, an E2B API key, and (optionally) Stripe keys, lets a user type one prompt and receive: a named company with a mission, a live website on a subdomain, a working email address, a per-company database and Git repo, a CEO agent to chat with, and daily autonomous task runs under credit caps and per-tool rate limits — with **every action verifiable on a public, hash-chained ledger linked to full LLM traces**.
+**MVP (current target, §0) — runs on one laptop:** `cp .env.example .env`, optionally add one LLM key, `bun run dev`. The script brings up Postgres + Temporal, migrates, and launches api + gateway + worker + deployd + web. Typing one prompt yields: a named company with a mission, a CEO that plans (with CFO/CMO/CTO sub-planners), autonomous worker tasks that write & run code in a sandbox, query the per-company database, and deploy a local site, plus human-in-the-loop approval for irreversible actions — **every action on a verifiable hash-chained ledger**. Zero external accounts beyond the single LLM key (and even that is optional — offline mode still runs the whole pipeline). *Validated 2026-06-15.*
+
+**Production (later phase):** a fresh `helm install opencorp` on a handful of VMs, configured with one LLM endpoint, an E2B API key, and (optionally) Stripe keys, adds: a live website on a public subdomain, a working email address (Stalwart + deliverability), per-company Git repo (Forgejo), real secrets vault (Infisical), real payments/withdrawals (Stripe Connect), public `/live` feed, and Langfuse public traces — the same one-prompt experience, hardened and multi-tenant.
