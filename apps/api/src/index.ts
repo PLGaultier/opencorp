@@ -584,6 +584,36 @@ app.get("/api/companies/:slug/payments", async (c) => {
   });
 });
 
+// §14 — ad campaigns with this-month spend, attributed revenue and ROAS. The
+// same numbers the autonomous optimizer acts on, exposed for transparency.
+app.get("/api/companies/:slug/campaigns", async (c) => {
+  const companyId = await publicCompanyId(c.req.param("slug"));
+  if (!companyId) return c.json({ error: "not_found" }, 404);
+  const rows = await sql<
+    { id: string; name: string; objective: string; status: string; budget_cents: string; budget_type: string; spend_cents: string; revenue_cents: string }[]
+  >`
+    SELECT ac.id, ac.name, ac.objective, ac.status, ac.budget_cents, ac.budget_type,
+      COALESCE((SELECT SUM(spend_cents) FROM ad_spend s
+                WHERE s.campaign_id = ac.id AND s.day >= to_char(date_trunc('month', now()), 'YYYY-MM-DD')), 0) AS spend_cents,
+      COALESCE((SELECT SUM(amount_cents) FROM payments p
+                WHERE p.campaign_id = ac.id AND p.created_at >= date_trunc('month', now())), 0) AS revenue_cents
+    FROM ad_campaigns ac WHERE ac.company_id = ${companyId}
+    ORDER BY ac.created_at DESC LIMIT 100`;
+  return c.json({
+    companyId,
+    campaigns: rows.map((r) => {
+      const spendCents = Number(r.spend_cents);
+      const revenueCents = Number(r.revenue_cents);
+      return {
+        id: r.id, name: r.name, objective: r.objective, status: r.status,
+        budgetCents: Number(r.budget_cents), budgetType: r.budget_type,
+        spendCents, revenueCents,
+        roas: spendCents > 0 ? Math.round((revenueCents / spendCents) * 100) / 100 : null,
+      };
+    }),
+  });
+});
+
 // §1 feature 3 — the company's real email inbox (Stalwart JMAP). Public read
 // mirrors the tasks/agents transparency: the ledger shows what the AI sent,
 // the inbox shows what came back. Owner can mark emails read from the UI.

@@ -49,7 +49,8 @@ export async function CompanyHeartbeat(input: { companyId: string }): Promise<{
   let adNote = "";
   try {
     const ads = await act.syncAdSpend(input.companyId);
-    if (ads.autoPaused > 0) adNote = ` Auto-paused ${ads.autoPaused} campaign(s) at the ad budget cap.`;
+    if (ads.autoPaused > 0) adNote += ` Auto-paused ${ads.autoPaused} campaign(s) at the ad budget cap.`;
+    if (ads.reallocated > 0) adNote += ` Reallocated ${ads.reallocated} ad budget(s) by ROAS.`;
   } catch {
     /* ad sync is best-effort; dispatch continues */
   }

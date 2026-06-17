@@ -4,7 +4,7 @@ import postgres from "postgres";
 import type { Ledger } from "@opencorp/ledgerd";
 import type { SecretStore } from "./secrets";
 import { paymentsFor } from "./providers/payments";
-import { adsFor, withinMonthlyCap } from "./providers/ads";
+import { adsFor, withinMonthlyCap, monthStartDay } from "./providers/ads";
 import { monthlyAdSpendCents } from "./ads";
 import { emailFor, isValidAddress, listUnsubscribeHeader, syncInbox } from "./providers/email";
 import { getAnalytics } from "./providers/analytics";
@@ -418,13 +418,18 @@ export const registry: Registry = {
           creative: { headline: string; body: string; imageUrl?: string };
         },
       ) {
-        const [p] = await ctx.sql<{ payment_link: string | null }[]>`
-          SELECT payment_link FROM products WHERE id = ${args.productId} AND company_id = ${ctx.companyId}`;
+        const [p] = await ctx.sql<{ payment_link: string | null; slug: string }[]>`
+          SELECT pr.payment_link, c.slug FROM products pr
+          JOIN companies c ON c.id = pr.company_id
+          WHERE pr.id = ${args.productId} AND pr.company_id = ${ctx.companyId}`;
         if (!p) return { error: "product_not_found" };
         const campaignId = randomUUID();
         const { conglomerateId, metaAccount } = await adsContext(ctx);
         const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
-        const linkUrl = p.payment_link ?? `${ctx.checkoutBase}/pay/${ctx.companyId}/${args.productId}`;
+        // Tag the destination with the campaign id so a sale through this ad is
+        // attributed back to it for ROAS (§14). The checkout reads ?c=.
+        const base = p.payment_link ?? `${ctx.checkoutBase}/pay/${p.slug}/${args.productId}`;
+        const linkUrl = `${base}${base.includes("?") ? "&" : "?"}c=${campaignId}`;
         const { providerRef } = await ads.createCampaign({
           campaignId,
           name: args.name,
@@ -521,11 +526,28 @@ export const registry: Registry = {
       schema: z.object({}),
       write: false,
       async handler(ctx) {
-        return ctx.sql`
+        // This month's spend + attributed revenue + ROAS so the CEO/CMO can
+        // judge performance (the same numbers the autonomous optimizer uses).
+        const rows = await ctx.sql<
+          { id: string; name: string; objective: string; status: string; budget_cents: string; budget_type: string; product_id: string | null; spend_cents: string; revenue_cents: string }[]
+        >`
           SELECT ac.id, ac.name, ac.objective, ac.status, ac.budget_cents, ac.budget_type, ac.product_id,
-                 COALESCE((SELECT SUM(spend_cents) FROM ad_spend s WHERE s.campaign_id = ac.id), 0) AS spend_cents
+                 COALESCE((SELECT SUM(spend_cents) FROM ad_spend s
+                           WHERE s.campaign_id = ac.id AND s.day >= ${monthStartDay()}), 0) AS spend_cents,
+                 COALESCE((SELECT SUM(amount_cents) FROM payments p
+                           WHERE p.campaign_id = ac.id AND p.created_at >= date_trunc('month', now())), 0) AS revenue_cents
           FROM ad_campaigns ac WHERE ac.company_id = ${ctx.companyId}
           ORDER BY ac.created_at DESC LIMIT 100`;
+        return rows.map((r) => {
+          const spendCents = Number(r.spend_cents);
+          const revenueCents = Number(r.revenue_cents);
+          return {
+            id: r.id, name: r.name, objective: r.objective, status: r.status,
+            budgetCents: Number(r.budget_cents), budgetType: r.budget_type, productId: r.product_id,
+            spendCents, revenueCents,
+            roas: spendCents > 0 ? Math.round((revenueCents / spendCents) * 100) / 100 : null,
+          };
+        });
       },
     },
     get_campaign_insights: {
@@ -544,7 +566,18 @@ export const registry: Registry = {
           (a, r) => ({ spendCents: a.spendCents + Number(r.spend_cents), impressions: a.impressions + Number(r.impressions), clicks: a.clicks + Number(r.clicks) }),
           { spendCents: 0, impressions: 0, clicks: 0 },
         );
-        return { campaignId: args.campaignId, totals, daily: rows.map((r) => ({ day: r.day, spendCents: Number(r.spend_cents), impressions: Number(r.impressions), clicks: Number(r.clicks) })) };
+        // Attributed revenue over the same window → ROAS (§14).
+        const [rev] = await ctx.sql<{ revenue_cents: string }[]>`
+          SELECT COALESCE(SUM(amount_cents), 0) AS revenue_cents FROM payments
+          WHERE campaign_id = ${args.campaignId}
+            AND created_at >= ${new Date(Date.now() - args.rangeDays * 86_400_000).toISOString()}`;
+        const revenueCents = Number(rev!.revenue_cents);
+        const roas = totals.spendCents > 0 ? Math.round((revenueCents / totals.spendCents) * 100) / 100 : null;
+        return {
+          campaignId: args.campaignId,
+          totals: { ...totals, revenueCents, roas },
+          daily: rows.map((r) => ({ day: r.day, spendCents: Number(r.spend_cents), impressions: Number(r.impressions), clicks: Number(r.clicks) })),
+        };
       },
     },
   },

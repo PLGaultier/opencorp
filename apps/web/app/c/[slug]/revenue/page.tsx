@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCompany, getPayments, getProducts } from "@/lib/data";
+import { getCampaigns, getCompany, getPayments, getProducts } from "@/lib/data";
 import { CopyLink } from "./copy-link";
 
 const eur = (cents: number, currency = "eur") =>
@@ -12,10 +12,11 @@ const dt = (iso: string) =>
 
 export default async function RevenuePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const [data, products, { summary, payments }] = await Promise.all([
+  const [data, products, { summary, payments }, campaigns] = await Promise.all([
     getCompany(slug),
     getProducts(slug),
     getPayments(slug),
+    getCampaigns(slug),
   ]);
   if (!data) notFound();
   const { company } = data;
@@ -62,6 +63,43 @@ export default async function RevenuePage({ params }: { params: Promise<{ slug: 
           ))}
         </div>
       </section>
+
+      {/* Ad campaigns — this month's spend, attributed revenue, ROAS (§14) */}
+      {campaigns.length > 0 && (
+        <section style={{ marginTop: "2rem" }}>
+          <h2 style={{ fontSize: "1.05rem" }}>Ad campaigns</h2>
+          <p className="sub" style={{ marginTop: "0.25rem" }}>
+            This month&apos;s spend and the revenue each campaign drove. The CMO scales winners up
+            and pauses losers automatically, within your budget cap.
+          </p>
+          <table className="board">
+            <thead>
+              <tr>
+                <th>Campaign</th>
+                <th>Status</th>
+                <th className="num">Budget</th>
+                <th className="num">Spend</th>
+                <th className="num">Revenue</th>
+                <th className="num">ROAS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {campaigns.map((ad) => (
+                <tr key={ad.id}>
+                  <td>{ad.name}</td>
+                  <td style={{ color: ad.status === "active" ? "var(--green)" : "var(--muted)" }}>{ad.status}</td>
+                  <td className="num">{eur(ad.budgetCents)}/{ad.budgetType === "daily" ? "d" : "life"}</td>
+                  <td className="num" style={{ color: "var(--muted)" }}>{eur(ad.spendCents)}</td>
+                  <td className="num pos">{eur(ad.revenueCents)}</td>
+                  <td className="num" style={{ color: ad.roas != null && ad.roas >= 2 ? "var(--green)" : ad.roas != null && ad.roas < 1 ? "var(--red)" : undefined }}>
+                    {ad.roas == null ? "—" : `${ad.roas.toFixed(2)}×`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
 
       {/* Payment history */}
       <section style={{ marginTop: "2rem" }}>

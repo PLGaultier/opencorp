@@ -11,7 +11,7 @@ import { FetchBrowser } from "./providers/browser";
 import { recordPayment } from "./revenue";
 import { processWithdrawal } from "./payout";
 import { ensureConnectOnboarding } from "./connect";
-import { syncCompanyAdSpend } from "./ads";
+import { syncCompanyAdSpend, optimizeCompanyAds } from "./ads";
 import { verifyStripeSignature, parseCheckoutCompleted, fetchStripeFeeCents } from "./providers/stripe-webhook";
 import { requestApproval, resolveApproval, notifyOwnerOfApproval } from "./approvals";
 
@@ -241,18 +241,28 @@ export function createGateway(opts?: {
     return row ?? null;
   };
 
+  // The ?c=<campaignId> tag rides from the ad creative's link through to the
+  // payment row so revenue is attributed to the campaign that drove it (§14).
+  const campaignTag = (c: { req: { query: (k: string) => string | undefined } }) => {
+    const v = c.req.query("c");
+    return v && /^[0-9a-f-]{36}$/i.test(v) ? v : null;
+  };
+
   app.get("/checkout/pay/:slug/:productId", async (c) => {
     const { slug, productId } = c.req.param();
     const p = await resolveProduct(slug, productId);
     if (!p) return c.html(checkoutPage({ title: "Not found", company: "OpenCorp", body: `<h1>Product not found</h1>` }), 404);
     const price = money(Number(p.price_cents), p.currency);
+    // Carry the campaign tag through the POST so attribution survives the click.
+    const campaign = campaignTag(c);
+    const action = campaign ? `?c=${campaign}` : "";
     return c.html(
       checkoutPage({
         title: "Checkout",
         company: p.company_name,
         body: `<h1>${p.name}</h1><p class="co">${p.company_name}</p>
           <p class="price">${price}</p>
-          <form method="post"><button type="submit">Pay ${price}</button></form>
+          <form method="post" action="${action}"><button type="submit">Pay ${price}</button></form>
           <p class="note">Local checkout — no real card is charged.</p>`,
       }),
     );
@@ -262,9 +272,15 @@ export function createGateway(opts?: {
     const { slug, productId } = c.req.param();
     const p = await resolveProduct(slug, productId);
     if (!p) return c.html(checkoutPage({ title: "Not found", company: "OpenCorp", body: `<h1>Product not found</h1>` }), 404);
+    // Only attribute to a campaign that actually belongs to this company.
+    const tag = campaignTag(c);
+    const campaignId = tag
+      ? (await sql<{ id: string }[]>`SELECT id FROM ad_campaigns WHERE id = ${tag} AND company_id = ${p.company_id}`)[0]?.id ?? null
+      : null;
     const result = await recordPayment(sql, ledger, {
       companyId: p.company_id,
       productId,
+      campaignId,
       amountCents: Number(p.price_cents),
       currency: p.currency,
       // Each checkout submit is a distinct sale; uniqueness keeps it idempotent
@@ -393,6 +409,22 @@ export function createGateway(opts?: {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: "sync_failed", message }, message === "company_not_found" ? 404 : 502);
+    }
+  });
+
+  // ROAS-driven budget reallocation (§14). Runs after the spend sync each
+  // heartbeat: shifts budget toward campaigns earning revenue, away from those
+  // that aren't — within the monthly cap. Signed like the other admin routes.
+  app.post("/admin/ads/optimize", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
+    const parsed = z.object({ companyId: z.string().uuid() }).safeParse(JSON.parse(raw || "{}"));
+    if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+    try {
+      return c.json(await optimizeCompanyAds(sql, ledger, secrets, parsed.data.companyId));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "optimize_failed", message }, message === "company_not_found" ? 404 : 502);
     }
   });
 

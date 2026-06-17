@@ -57,6 +57,13 @@
       "when": 1781691953951,
       "tag": "0007_wandering_forgotten_one",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781702346843,
+      "tag": "0008_curly_gamora",
+      "breakpoints": true
     }
   ]
 }

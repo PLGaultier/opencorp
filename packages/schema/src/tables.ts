@@ -292,6 +292,9 @@ export const payments = pgTable("payments", {
     .notNull()
     .references(() => companies.id),
   productId: uuid("product_id").references(() => products.id),
+  // Ad campaign that drove this sale (§14 ROAS attribution), via the ?c= tag on
+  // the ad creative's checkout link. Null = organic / unattributed.
+  campaignId: uuid("campaign_id").references(() => adCampaigns.id),
   amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
   currency: text("currency").notNull(),
   providerRef: text("provider_ref"),

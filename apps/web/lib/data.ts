@@ -97,6 +97,19 @@ export interface Payment {
   createdAt: string;
 }
 
+/** An ad campaign with this-month spend, attributed revenue and ROAS (§14). */
+export interface Campaign {
+  id: string;
+  name: string;
+  objective: string;
+  status: "paused" | "active" | "archived";
+  budgetCents: number;
+  budgetType: string;
+  spendCents: number;
+  revenueCents: number;
+  roas: number | null;
+}
+
 export interface RevenueSummary {
   grossCents: number;
   feesCents: number;
@@ -237,6 +250,13 @@ export const demoProducts: Record<string, Product[]> = {
   ],
   "a-newsletter-about": [
     { id: "p3", name: "Newsletter subscription — monthly", priceCents: 500, currency: "eur", paymentLink: "#demo-payment-link" },
+  ],
+};
+
+export const demoCampaigns: Record<string, Campaign[]> = {
+  "sell-handmade-ceramic": [
+    { id: "ac1", name: "Mugs — summer push", objective: "OUTCOME_SALES", status: "active", budgetCents: 3000, budgetType: "daily", spendCents: 1800, revenueCents: 5800, roas: 3.22 },
+    { id: "ac2", name: "Mugs — broad awareness", objective: "OUTCOME_AWARENESS", status: "paused", budgetCents: 1000, budgetType: "daily", spendCents: 1600, revenueCents: 0, roas: 0 },
   ],
 };
 
@@ -426,6 +446,18 @@ export async function getPayments(
     return (await res.json()) as { summary: RevenueSummary; payments: Payment[] };
   } catch {
     return { summary: { grossCents: 0, feesCents: 0, netCents: 0, count: 0 }, payments: [] };
+  }
+}
+
+export async function getCampaigns(slug: string): Promise<Campaign[]> {
+  if (!API_URL) return demoCampaigns[slug] ?? [];
+  try {
+    const res = await fetch(`${API_URL}/api/companies/${slug}/campaigns`, { next: { revalidate: 30 } });
+    if (!res.ok) return [];
+    const { campaigns } = (await res.json()) as { campaigns: Campaign[] };
+    return campaigns;
+  } catch {
+    return [];
   }
 }
 

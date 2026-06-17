@@ -82,6 +82,78 @@ export function dayString(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// ── ROAS-driven reallocation (§14 closed-loop growth) ──────────────────────
+
+export interface CampaignPerf {
+  campaignId: string;
+  budgetCents: number;
+  spendCents: number;
+  revenueCents: number; // attributed this month
+}
+
+export interface ReallocationOpts {
+  targetRoas: number; // scale up at/above this (revenue per €1 spend)
+  minSpendCents: number; // need this much spend before judging a campaign
+  killRoas: number; // below this (after min spend) → pause
+  maxBudgetCents: number; // never raise a campaign above this
+  minBudgetCents: number; // never cut below this
+  stepUp: number; // winner budget multiplier (e.g. 1.5)
+  stepDown: number; // weak-campaign budget multiplier (e.g. 0.5)
+  /** Stop raising budgets once month-to-date reaches this fraction of the cap. */
+  headroomFraction: number;
+}
+
+export const DEFAULT_REALLOCATION: ReallocationOpts = {
+  targetRoas: Number(process.env.ADS_TARGET_ROAS ?? 2),
+  minSpendCents: 500,
+  killRoas: 0.5,
+  maxBudgetCents: 1_000_000_00,
+  minBudgetCents: 100,
+  stepUp: 1.5,
+  stepDown: 0.5,
+  headroomFraction: 0.9,
+};
+
+export type ReallocAction = "increase" | "decrease" | "pause" | "hold";
+
+export interface ReallocDecision {
+  campaignId: string;
+  action: ReallocAction;
+  fromBudgetCents: number;
+  toBudgetCents: number;
+  roas: number;
+}
+
+/**
+ * Decide per-campaign budget moves from this month's ROAS, bounded by the
+ * owner's monthly cap. Pure + deterministic so it's unit-tested and the agent
+ * can never push spend past the cap: budgets only rise while month-to-date is
+ * under `headroomFraction` of the cap, and clear losers are paused outright.
+ */
+export function planReallocation(
+  campaigns: CampaignPerf[],
+  ctx: { capCents: number; monthToDateCents: number },
+  opts: ReallocationOpts = DEFAULT_REALLOCATION,
+): ReallocDecision[] {
+  const hasHeadroom = ctx.capCents > 0 && ctx.monthToDateCents < ctx.capCents * opts.headroomFraction;
+  return campaigns.map((c) => {
+    const roas = c.spendCents > 0 ? c.revenueCents / c.spendCents : 0;
+    const base = { campaignId: c.campaignId, fromBudgetCents: c.budgetCents, roas };
+    // Not enough signal yet — leave it running as-is.
+    if (c.spendCents < opts.minSpendCents) return { ...base, action: "hold", toBudgetCents: c.budgetCents };
+    if (roas >= opts.targetRoas && hasHeadroom) {
+      const to = Math.min(Math.round(c.budgetCents * opts.stepUp), opts.maxBudgetCents);
+      return { ...base, action: to > c.budgetCents ? "increase" : "hold", toBudgetCents: to };
+    }
+    if (roas < opts.killRoas) return { ...base, action: "pause", toBudgetCents: c.budgetCents };
+    if (roas < 1) {
+      const to = Math.max(Math.round(c.budgetCents * opts.stepDown), opts.minBudgetCents);
+      return { ...base, action: to < c.budgetCents ? "decrease" : "hold", toBudgetCents: to };
+    }
+    return { ...base, action: "hold", toBudgetCents: c.budgetCents };
+  });
+}
+
 // ── Local (dev / offline) ──────────────────────────────────────────────────
 class LocalAds implements AdsProvider {
   readonly kind = "local";

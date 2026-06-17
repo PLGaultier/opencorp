@@ -338,15 +338,26 @@ export async function postDailyBrief(companyId: string, brief: string): Promise<
  * Run each heartbeat so the CEO sees fresh spend and the cap is enforced even
  * between worker tasks. Idempotent in the gateway, so retries are safe.
  */
-export async function syncAdSpend(companyId: string): Promise<{ autoPaused: number; monthToDateCents: number }> {
-  const raw = JSON.stringify({ companyId });
-  const sig = createHmac("sha256", GATEWAY_SECRET).update(raw).digest("hex");
-  const res = await fetch(`${GATEWAY_URL}/admin/ads/sync`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-opencorp-sig": sig },
-    body: raw,
-  });
-  if (res.status >= 500) throw new Error(`gateway ads sync ${res.status}`);
-  const body = (await res.json().catch(() => ({}))) as { autoPaused?: number; monthToDateCents?: number };
-  return { autoPaused: body.autoPaused ?? 0, monthToDateCents: body.monthToDateCents ?? 0 };
+export async function syncAdSpend(
+  companyId: string,
+): Promise<{ autoPaused: number; reallocated: number; monthToDateCents: number }> {
+  const signedPost = async (path: string) => {
+    const raw = JSON.stringify({ companyId });
+    const sig = createHmac("sha256", GATEWAY_SECRET).update(raw).digest("hex");
+    const res = await fetch(`${GATEWAY_URL}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencorp-sig": sig },
+      body: raw,
+    });
+    if (res.status >= 500) throw new Error(`gateway ${path} ${res.status}`);
+    return (await res.json().catch(() => ({}))) as Record<string, number | undefined>;
+  };
+  // Mirror spend + enforce the cap first, then reallocate on fresh numbers.
+  const sync = await signedPost("/admin/ads/sync");
+  const opt = await signedPost("/admin/ads/optimize");
+  return {
+    autoPaused: sync.autoPaused ?? 0,
+    reallocated: opt.reallocated ?? 0,
+    monthToDateCents: sync.monthToDateCents ?? 0,
+  };
 }
