@@ -57,8 +57,9 @@ These punch above their weight — use them:
 - **Highlight one keyword** in the H1: `<span class="highlight">word</span>` (marker
   swipe) or `.text-gradient`. One word, not the whole line.
 - **Reassurance microcopy** under the hero CTA: `<p class="reassure">No card required</p>`.
-- **Social proof row** in the hero: `.social-proof` = overlapping `.avatars` + `.stars`
-  + "Loved by N users". Only with **real** numbers — never fabricate proof.
+- **Social proof row** in the hero: `.social-proof` = `.stars` + a real "Loved by
+  N users" count. Only with **real** numbers — never fabricate proof. Skip the
+  `.avatars` (faces) unless you have **real** user photos — no placeholder faces.
 - **Framed screenshot**: put product images in `.app-frame` (faux browser bar + big
   soft shadow) — instantly looks like a real product.
 - **Stat callouts** (`.stats` / `.stat`), **badges** (`.badge` for "Featured on"/awards),
