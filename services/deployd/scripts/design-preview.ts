@@ -11,12 +11,26 @@ import { DESIGN_SYSTEM_CSS } from "../src/design-system";
 
 const out = process.argv[2] ?? "/tmp/opencorp-design-preview.html";
 
-// A 1×1 placeholder so the framed "screenshot" renders without an external asset.
-const shot =
-  "data:image/svg+xml;utf8," +
-  encodeURIComponent(
-    `<svg xmlns='http://www.w3.org/2000/svg' width='980' height='560'><rect width='980' height='560' fill='#eef2ff'/><rect x='40' y='40' width='420' height='40' rx='8' fill='#c7d2fe'/><rect x='40' y='110' width='900' height='180' rx='12' fill='#dbeafe'/><rect x='40' y='320' width='280' height='200' rx='12' fill='#e0e7ff'/><rect x='350' y='320' width='280' height='200' rx='12' fill='#e0e7ff'/><rect x='660' y='320' width='280' height='200' rx='12' fill='#e0e7ff'/></svg>`,
+// All preview imagery is inline SVG (data URIs) so the file renders fully
+// offline — no external requests, nothing to "fail to load". Real sites supply
+// their own real image URLs.
+const svg = (markup: string) => "data:image/svg+xml;utf8," + encodeURIComponent(markup);
+
+const shot = svg(
+  `<svg xmlns='http://www.w3.org/2000/svg' width='980' height='560'><rect width='980' height='560' fill='#eef2ff'/><rect x='40' y='40' width='420' height='40' rx='8' fill='#c7d2fe'/><rect x='40' y='110' width='900' height='180' rx='12' fill='#dbeafe'/><rect x='40' y='320' width='280' height='200' rx='12' fill='#e0e7ff'/><rect x='350' y='320' width='280' height='200' rx='12' fill='#e0e7ff'/><rect x='660' y='320' width='280' height='200' rx='12' fill='#e0e7ff'/></svg>`,
+);
+
+// A round avatar: colored circle + an initial. Self-contained.
+const avatar = (bg: string, initial: string) =>
+  svg(
+    `<svg xmlns='http://www.w3.org/2000/svg' width='80' height='80'><circle cx='40' cy='40' r='40' fill='${bg}'/><text x='40' y='52' font-family='sans-serif' font-size='34' font-weight='700' fill='white' text-anchor='middle'>${initial}</text></svg>`,
   );
+const heroAvatars = [
+  ["#2563eb", "A"], ["#f59e0b", "S"], ["#10b981", "J"], ["#ef4444", "R"], ["#8b5cf6", "K"],
+]
+  .map(([bg, i]) => `<img class="avatar" src="${avatar(bg!, i!)}" alt="">`)
+  .join("");
+const founderPhoto = avatar("#0ea5e9", "M");
 
 const html = `<!doctype html>
 <html lang="en"><head>
@@ -37,9 +51,7 @@ const html = `<!doctype html>
     <a class="btn btn--lg" href="#pricing">Get the pack — €19</a>
     <p class="reassure">Instant download · 30-day money-back guarantee</p>
     <div class="social-proof mt-button">
-      <div class="avatars">
-        <img class="avatar" src="https://i.pravatar.cc/80?img=1" alt=""><img class="avatar" src="https://i.pravatar.cc/80?img=2" alt=""><img class="avatar" src="https://i.pravatar.cc/80?img=3" alt=""><img class="avatar" src="https://i.pravatar.cc/80?img=4" alt=""><img class="avatar" src="https://i.pravatar.cc/80?img=5" alt="">
-      </div>
+      <div class="avatars">${heroAvatars}</div>
       <span class="stars">★★★★★</span>
       <span class="count">Loved by <b>4,210</b> desktops</span>
     </div>
@@ -87,7 +99,7 @@ const html = `<!doctype html>
 
   <section class="section"><div class="container">
     <div class="founder">
-      <img src="https://i.pravatar.cc/144?img=12" alt="">
+      <img src="${founderPhoto}" alt="">
       <div class="stack">
         <h3>Hey, I'm the maker 👋</h3>
         <p>I got tired of ugly, cluttered wallpaper sites. So I made the pack I wanted: 30 originals, one fair price, no subscriptions. If you don't love it, I'll refund you — just reply to the receipt.</p>
