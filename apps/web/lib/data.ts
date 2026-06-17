@@ -20,6 +20,7 @@ export interface Company {
   dailyTaskCap: number;
   autonomyLevel: "supervised" | "bounded" | "full";
   isPublic: boolean;
+  adMonthlyBudgetCapCents: number;
   emailAddress?: string | null;
 }
 
@@ -128,6 +129,18 @@ export interface TerminalEvent {
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 export const isDemo = !API_URL;
 
+/** Local MVP frictionless mode (API injects a single dev owner). */
+export const AUTH_DISABLED = process.env.NEXT_PUBLIC_AUTH_DISABLED === "1";
+/** Whether the GitHub social-login button should be shown. */
+export const GITHUB_ENABLED = process.env.NEXT_PUBLIC_AUTH_GITHUB === "1";
+/** Base URL where deployd serves published company sites (path-based, local). */
+const DEPLOYD_URL = process.env.NEXT_PUBLIC_DEPLOYD_URL ?? "";
+
+/** Public URL of a company's website — local deployd path, else prod subdomain. */
+export function siteUrl(slug: string): string {
+  return DEPLOYD_URL ? `${DEPLOYD_URL.replace(/\/$/, "")}/sites/${slug}/` : `http://${slug}.opencorp.app`;
+}
+
 export const demoCompanies: Company[] = [
   {
     id: "e4e62166-f974-44fe-842e-8f38e2610832",
@@ -144,6 +157,7 @@ export const demoCompanies: Company[] = [
     dailyTaskCap: 3,
     autonomyLevel: "supervised",
     isPublic: true,
+    adMonthlyBudgetCapCents: 0,
   },
   {
     id: "b220b359-37fa-4877-b217-7b20c83289b2",
@@ -160,6 +174,7 @@ export const demoCompanies: Company[] = [
     dailyTaskCap: 3,
     autonomyLevel: "supervised",
     isPublic: true,
+    adMonthlyBudgetCapCents: 0,
   },
 ];
 

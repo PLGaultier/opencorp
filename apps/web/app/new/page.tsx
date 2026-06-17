@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { API_URL } from "@/lib/data";
+import { API_URL, AUTH_DISABLED } from "@/lib/data";
 import { useSession } from "@/lib/auth-client";
 
 /**
@@ -56,7 +56,7 @@ export default function NewCompanyPage() {
     );
   }
 
-  if (!isPending && !session) {
+  if (!AUTH_DISABLED && !isPending && !session) {
     return (
       <main>
         <h1>New company</h1>

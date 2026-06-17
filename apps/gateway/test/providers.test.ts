@@ -62,6 +62,7 @@ describe("payments provider (§10)", () => {
     expect(p.kind).toBe("local");
     const { providerRef, paymentLink } = await p.createProduct({
       productId: "p1",
+      companyId: "co-1",
       slug: "acme",
       name: "Starter",
       priceCents: 1900,
@@ -75,8 +76,8 @@ describe("payments provider (§10)", () => {
 });
 
 describe("registry wiring (§7.1)", () => {
-  test("M3 capability servers are present", () => {
-    for (const s of ["payments", "email", "browser", "analytics", "finance"]) {
+  test("M3 capability servers + ads (§14) are present", () => {
+    for (const s of ["payments", "email", "browser", "analytics", "finance", "ads"]) {
       expect(registry[s]).toBeDefined();
     }
   });
@@ -87,5 +88,14 @@ describe("registry wiring (§7.1)", () => {
     expect(registry.browser!.submit_form!.gated).toBe(true);
     expect(DEFAULT_LIMITS.send_email).toBeDefined();
     expect(DEFAULT_LIMITS.create_product).toBeDefined();
+  });
+
+  test("ad money-out tools are gated with a budgetGate; pausing is not", () => {
+    expect(registry.ads!.launch_campaign!.gated).toBe(true);
+    expect(registry.ads!.launch_campaign!.budgetGate).toBeDefined();
+    expect(registry.ads!.set_budget!.gated).toBe(true);
+    expect(registry.ads!.set_budget!.budgetGate).toBeDefined();
+    expect(registry.ads!.pause_campaign!.gated).toBeUndefined();
+    expect(DEFAULT_LIMITS.launch_campaign).toBeDefined();
   });
 });

@@ -36,6 +36,27 @@
       "when": 1781514309857,
       "tag": "0004_marvelous_sauron",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781679058124,
+      "tag": "0005_ambitious_wildside",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781688919542,
+      "tag": "0006_perpetual_crystal",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781691953951,
+      "tag": "0007_wandering_forgotten_one",
+      "breakpoints": true
     }
   ]
 }

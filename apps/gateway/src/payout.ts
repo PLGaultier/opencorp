@@ -2,6 +2,7 @@ import type postgres from "postgres";
 import type { Ledger } from "@opencorp/ledgerd";
 import type { SecretStore } from "./secrets";
 import { paymentsFor } from "./providers/payments";
+import { connectAccountFor } from "./connect";
 
 /**
  * Withdrawals / money-out (§10, §7.3). The mirror of `recordPayment`: a company
@@ -55,8 +56,11 @@ export async function processWithdrawal(
   }
   if (reserved.kind === "error") return { status: "failed", reason: reserved.reason };
 
-  // 2. Pay out externally (Stripe Connect transfer, or local no-op).
-  const destination = await secrets.get(req.companyId, "STRIPE_CONNECT_ACCOUNT");
+  // 2. Pay out externally (Stripe Connect transfer, or local no-op). The
+  // connected account is per *conglomerate* (one per owner): KYC + the bank
+  // account live on the human, so all of an owner's companies pay out to the
+  // same acct_… The per-company balance was already split in our ledger.
+  const destination = await connectAccountFor(sql, req.conglomerateId);
   const provider = await paymentsFor(req.companyId, secrets, "");
   try {
     const { transferId } = await provider.payout({

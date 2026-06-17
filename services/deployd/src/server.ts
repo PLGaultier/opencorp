@@ -1,9 +1,38 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { readFile } from "node:fs/promises";
+import { join, extname } from "node:path";
 import { renderLanding } from "./template";
-import { publishSite } from "./publish";
+import { publishSite, sitesDir } from "./publish";
 
 /** deployd HTTP API — called by Temporal activities (and later web-mcp). */
+
+/**
+ * Where published sites are reachable. In prod Caddy serves {slug}.{domain};
+ * locally there's no Caddy, so deployd serves them itself path-based at
+ * {PUBLIC_SITE_URL or DEPLOYD_URL}/sites/{slug}/ (no wildcard DNS needed).
+ */
+function siteUrl(slug: string): string {
+  const base = (
+    process.env.PUBLIC_SITE_URL ??
+    process.env.DEPLOYD_URL ??
+    `http://localhost:${process.env.PORT ?? 3002}`
+  ).replace(/\/$/, "");
+  return `${base}/sites/${slug}/`;
+}
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".ico": "image/x-icon",
+  ".txt": "text/plain; charset=utf-8",
+};
 
 const DeployLanding = z.object({
   slug: z.string(),
@@ -35,8 +64,26 @@ app.post("/deploy/landing", async (c) => {
     copy: d.copy,
   });
   const { root } = await publishSite({ slug: d.slug, files: { "index.html": html } });
-  const domain = process.env.OPENCORP_DOMAIN ?? "localhost";
-  return c.json({ ok: true, root, url: `http://${d.slug}.${domain}` });
+  return c.json({ ok: true, root, url: siteUrl(d.slug) });
+});
+
+// Serve published sites path-based so they're reachable on a plain laptop
+// (no Caddy / wildcard DNS). {slug} → SITES_DIR/{slug}/{path or index.html}.
+app.get("/sites/:slug", (c) => c.redirect(`/sites/${c.req.param("slug")}/`));
+app.get("/sites/:slug/*", async (c) => {
+  const slug = c.req.param("slug");
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(slug)) return c.text("not found", 404);
+  let rel = c.req.path.slice(`/sites/${slug}/`.length);
+  if (rel === "" || rel.endsWith("/")) rel += "index.html";
+  if (rel.includes("..")) return c.text("bad path", 400);
+  try {
+    const data = await readFile(join(sitesDir(), slug, rel));
+    return new Response(data, {
+      headers: { "content-type": MIME[extname(rel).toLowerCase()] ?? "application/octet-stream" },
+    });
+  } catch {
+    return c.text("not found", 404);
+  }
 });
 
 // raw file deploy (used by worker agents in M2+ via web-mcp deploy_site)

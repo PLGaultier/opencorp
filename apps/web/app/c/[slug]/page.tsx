@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getAgents, getCompany, getCompanyEvents, getCompanyTasks, getEmails, getProducts } from "@/lib/data";
+import { getAgents, getCompany, getCompanyEvents, getCompanyTasks, getEmails, getProducts, siteUrl } from "@/lib/data";
 import { CompanyControls } from "./controls";
 import { CompanyTerminal } from "./terminal";
 import { TaskComposer } from "./task-composer";
@@ -60,8 +60,8 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
       </div>
       <p className="sub" style={{ margin: "0.75rem 0 0" }}>
         Website:{" "}
-        <a href={`http://${slug}.opencorp.app`} style={{ textDecoration: "underline" }}>
-          {slug}.opencorp.app
+        <a href={siteUrl(slug)} target="_blank" rel="noreferrer" style={{ textDecoration: "underline" }}>
+          {siteUrl(slug).replace(/^https?:\/\//, "").replace(/\/$/, "")}
         </a>
       </p>
 

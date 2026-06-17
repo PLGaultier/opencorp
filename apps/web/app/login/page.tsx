@@ -2,22 +2,38 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { API_URL } from "@/lib/data";
+import { API_URL, GITHUB_ENABLED } from "@/lib/data";
 import { signIn, signUp } from "@/lib/auth-client";
 
 /**
- * Sign in / sign up (§3 Better Auth, email + password). Signing up creates
- * the user's conglomerate server-side, so they can create companies right
- * away. Public pages never require this — auth gates owner actions only.
+ * Sign in / sign up (§3 Better Auth). Leads with GitHub OAuth when configured;
+ * email + password stays as a fallback. Signing up creates the user's
+ * conglomerate server-side, so they can create companies right away. Public
+ * pages never require this — auth gates owner actions only.
  */
 export default function LoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
+  // Show the password form only when GitHub isn't available, or on request.
+  const [showEmail, setShowEmail] = useState(!GITHUB_ENABLED);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const github = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      // Absolute URL to the dashboard (:3000). A relative "/" resolves against
+      // the API origin (:3001), which has no root route → 404 after auth.
+      await signIn.social({ provider: "github", callbackURL: `${window.location.origin}/` });
+    } catch {
+      setError("GitHub sign-in unreachable");
+      setBusy(false);
+    }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,6 +76,23 @@ export default function LoginPage() {
           : "Signing up creates your conglomerate — you can launch companies immediately."}
       </p>
 
+      {GITHUB_ENABLED && (
+        <>
+          <button className="btn primary" onClick={github} disabled={busy} style={{ width: "100%" }}>
+            {busy ? "…" : "Continue with GitHub"}
+          </button>
+          {error && !showEmail && <p className="auth-error">{error}</p>}
+          <button
+            className="btn link"
+            onClick={() => setShowEmail((v) => !v)}
+            style={{ marginTop: "0.75rem" }}
+          >
+            {showEmail ? "hide email sign-in" : "use email instead"}
+          </button>
+        </>
+      )}
+
+      {showEmail && (
       <form onSubmit={submit} className="auth-form">
         {mode === "signup" && (
           <input
@@ -91,7 +124,9 @@ export default function LoginPage() {
           {busy ? "…" : mode === "signin" ? "Sign in" : "Sign up"}
         </button>
       </form>
+      )}
 
+      {showEmail && (
       <p className="sub" style={{ marginTop: "1rem" }}>
         {mode === "signin" ? (
           <>
@@ -109,6 +144,7 @@ export default function LoginPage() {
           </>
         )}
       </p>
+      )}
     </main>
   );
 }

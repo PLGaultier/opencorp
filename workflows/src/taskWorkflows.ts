@@ -43,6 +43,17 @@ export async function CompanyHeartbeat(input: { companyId: string }): Promise<{
   dispatched: number;
   stoppedBecause: string;
 }> {
+  // Mirror ad spend + enforce the monthly cap before planning, so the CEO sees
+  // fresh spend and over-budget campaigns are already paused (§14). Never blocks
+  // the heartbeat — a sync failure is logged via the activity's own ledger path.
+  let adNote = "";
+  try {
+    const ads = await act.syncAdSpend(input.companyId);
+    if (ads.autoPaused > 0) adNote = ` Auto-paused ${ads.autoPaused} campaign(s) at the ad budget cap.`;
+  } catch {
+    /* ad sync is best-effort; dispatch continues */
+  }
+
   // §5.2 steps 1–3: the CEO gathers context, plans, creates tasks, maybe
   // patches the mission. Planning failure must not block dispatch of work
   // that's already queued.
@@ -77,7 +88,7 @@ export async function CompanyHeartbeat(input: { companyId: string }): Promise<{
   // step 5: daily brief to the owner
   await act.postDailyBrief(
     input.companyId,
-    `${brief} Dispatched ${dispatched} task(s); stopped because: ${reason}.`,
+    `${brief} Dispatched ${dispatched} task(s); stopped because: ${reason}.${adNote}`,
   );
   return { dispatched, stoppedBecause: reason };
 }

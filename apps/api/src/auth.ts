@@ -28,10 +28,21 @@ export const DEV_USER_ID = "dev-user";
 const authSql = postgres(DATABASE_URL, { max: 3 });
 const db = drizzle(authSql, { schema });
 
+// §3 — social login. GitHub OAuth when configured (preferred over passwords).
+// Callback to register in the GitHub OAuth App:
+//   {API_URL}/api/auth/callback/github  (e.g. http://localhost:3001/api/auth/callback/github)
+const GITHUB_ID = process.env.GITHUB_CLIENT_ID;
+const GITHUB_SECRET = process.env.GITHUB_CLIENT_SECRET;
+export const GITHUB_ENABLED = Boolean(GITHUB_ID && GITHUB_SECRET);
+
 export const auth = betterAuth({
   baseURL: process.env.API_URL ?? "http://localhost:3001",
   database: drizzleAdapter(db, { provider: "pg", schema }),
+  // Email+password kept as a fallback, but the UI leads with GitHub.
   emailAndPassword: { enabled: true },
+  socialProviders: GITHUB_ENABLED
+    ? { github: { clientId: GITHUB_ID!, clientSecret: GITHUB_SECRET! } }
+    : {},
   trustedOrigins: [WEB_ORIGIN],
   databaseHooks: {
     user: {

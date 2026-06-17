@@ -12,6 +12,7 @@ import type { SecretStore } from "../secrets";
  */
 export interface NewProduct {
   productId: string;
+  companyId: string;
   slug: string;
   name: string;
   priceCents: number;
@@ -68,9 +69,16 @@ class StripePayments implements PaymentsProvider {
       unit_amount: String(p.priceCents),
       currency: p.currency,
     });
+    // Stamp company/product onto the link and the resulting PaymentIntent so
+    // the webhook can map a payment back to us even if the pl_… → provider_ref
+    // lookup ever misses (§9.4). The link id is still the primary key we match.
     const link = await this.call("payment_links", {
       "line_items[0][price]": price.id,
       "line_items[0][quantity]": "1",
+      "metadata[companyId]": p.companyId,
+      "metadata[productId]": p.productId,
+      "payment_intent_data[metadata][companyId]": p.companyId,
+      "payment_intent_data[metadata][productId]": p.productId,
     });
     return { providerRef: `stripe:${product.id}:${link.id}`, paymentLink: link.url as string };
   }
@@ -81,7 +89,7 @@ class StripePayments implements PaymentsProvider {
   }
 
   async payout(req: PayoutRequest) {
-    if (!req.destination) throw new Error("stripe payout needs a connected account (STRIPE_CONNECT_ACCOUNT)");
+    if (!req.destination) throw new Error("stripe payout needs a connected account — complete Connect onboarding first");
     const transfer = await this.call("transfers", {
       amount: String(req.amountCents),
       currency: req.currency,

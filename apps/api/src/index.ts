@@ -86,7 +86,7 @@ const requireCompanyAccess: typeof requireAuth = async (c, next) => {
 // money withdrawn, current balance. Public companies only (is_public, §4).
 const PNL_COLUMNS = sql`
   c.id, c.slug, c.name, c.mission, c.status, c.real_balance_cents,
-  c.daily_task_cap, c.autonomy_level, c.is_public,
+  c.daily_task_cap, c.autonomy_level, c.is_public, c.ad_monthly_budget_cap_cents,
   COALESCE((SELECT SUM(amount_cents) FROM payments p WHERE p.company_id = c.id), 0) AS revenue_cents,
   COALESCE((SELECT -SUM(delta) FROM credit_entries ce
             WHERE ce.company_id = c.id AND ce.reason IN ('task_charge','task_refund')), 0) AS credits_spent,
@@ -100,6 +100,7 @@ interface PnlRow {
   real_balance_cents: string; revenue_cents: string; credits_spent: string;
   money_out_cents: string; tasks_done: string; tasks_queued: string;
   daily_task_cap: string; autonomy_level: string; is_public: boolean;
+  ad_monthly_budget_cap_cents: string;
 }
 const toPnl = (r: PnlRow) => ({
   id: r.id, slug: r.slug, name: r.name, mission: r.mission, status: r.status,
@@ -112,6 +113,7 @@ const toPnl = (r: PnlRow) => ({
   dailyTaskCap: Number(r.daily_task_cap),
   autonomyLevel: r.autonomy_level,
   isPublic: r.is_public,
+  adMonthlyBudgetCapCents: Number(r.ad_monthly_budget_cap_cents),
 });
 
 app.get("/api/companies", async (c) => {
@@ -273,6 +275,8 @@ app.patch("/companies/:id", requireAuth, requireCompanyAccess, async (c) => {
       dailyTaskCap: z.number().int().min(1).max(50).optional(),
       autonomyLevel: z.enum(["supervised", "bounded", "full"]).optional(),
       isPublic: z.boolean().optional(),
+      // §14 — owner's monthly ad-spend ceiling (cents). 0 disables ads.
+      adMonthlyBudgetCapCents: z.number().int().min(0).max(1_000_000_00).optional(),
     })
     .refine((b) => Object.values(b).some((v) => v !== undefined), { message: "empty patch" })
     .safeParse(await c.req.json());
@@ -280,21 +284,23 @@ app.patch("/companies/:id", requireAuth, requireCompanyAccess, async (c) => {
   const companyId = c.req.param("id");
   const p = body.data;
   const [row] = await sql<
-    { id: string; name: string; mission: string; daily_task_cap: number; autonomy_level: string; is_public: boolean }[]
+    { id: string; name: string; mission: string; daily_task_cap: number; autonomy_level: string; is_public: boolean; ad_monthly_budget_cap_cents: string }[]
   >`
     UPDATE companies SET
       name = COALESCE(${p.name ?? null}, name),
       mission = COALESCE(${p.mission ?? null}, mission),
       daily_task_cap = COALESCE(${p.dailyTaskCap ?? null}, daily_task_cap),
       autonomy_level = COALESCE(${p.autonomyLevel ?? null}, autonomy_level),
-      is_public = COALESCE(${p.isPublic ?? null}, is_public)
+      is_public = COALESCE(${p.isPublic ?? null}, is_public),
+      ad_monthly_budget_cap_cents = COALESCE(${p.adMonthlyBudgetCapCents ?? null}, ad_monthly_budget_cap_cents)
     WHERE id = ${companyId}
-    RETURNING id, name, mission, daily_task_cap, autonomy_level, is_public`;
+    RETURNING id, name, mission, daily_task_cap, autonomy_level, is_public, ad_monthly_budget_cap_cents`;
   if (!row) return c.json({ error: "not_found" }, 404);
   await ledger.append({ companyId, actor: "user", eventType: "company_settings", payload: p });
   return c.json({
     id: row.id, name: row.name, mission: row.mission,
     dailyTaskCap: row.daily_task_cap, autonomyLevel: row.autonomy_level, isPublic: row.is_public,
+    adMonthlyBudgetCapCents: Number(row.ad_monthly_budget_cap_cents),
   });
 });
 
@@ -522,17 +528,19 @@ app.post("/companies/:id/chat", requireAuth, requireCompanyAccess, async (c) => 
 });
 
 // §8 — products the CEO created (public catalogue) and payment history.
-// Payment links are deterministic: {checkoutBase}/pay/{slug}/{productId}.
+// Local payment links are deterministic: {checkoutBase}/pay/{slug}/{productId},
+// served by the gateway (which owns recordPayment). Must match the gateway's
+// own default so a link minted here resolves there.
 const checkoutBase =
-  process.env.CHECKOUT_BASE_URL ?? "http://localhost:3002/checkout";
+  process.env.CHECKOUT_BASE_URL ?? "http://localhost:3004/checkout";
 
 app.get("/api/companies/:slug/products", async (c) => {
   const slug = c.req.param("slug");
   const companyId = await publicCompanyId(slug);
   if (!companyId) return c.json({ error: "not_found" }, 404);
   const rows = await sql<
-    { id: string; name: string; price_cents: string; currency: string }[]
-  >`SELECT id, name, price_cents, currency FROM products WHERE company_id = ${companyId} ORDER BY name`;
+    { id: string; name: string; price_cents: string; currency: string; payment_link: string | null }[]
+  >`SELECT id, name, price_cents, currency, payment_link FROM products WHERE company_id = ${companyId} ORDER BY name`;
   return c.json({
     companyId,
     products: rows.map((p) => ({
@@ -540,7 +548,8 @@ app.get("/api/companies/:slug/products", async (c) => {
       name: p.name,
       priceCents: Number(p.price_cents),
       currency: p.currency,
-      paymentLink: `${checkoutBase}/pay/${slug}/${p.id}`,
+      // Real Stripe link when present, else the deterministic local one.
+      paymentLink: p.payment_link ?? `${checkoutBase}/pay/${slug}/${p.id}`,
     })),
   });
 });
@@ -699,10 +708,16 @@ app.get("/api/conglomerates/:id/credits", requireAuth, async (c) => {
   const [sub] = await sql<{ plan: string; status: string; current_period_start: Date | null }[]>`
     SELECT plan, status, current_period_start FROM subscriptions
     WHERE conglomerate_id = ${conglomerateId} AND status = 'active' LIMIT 1`;
+  // Stripe Connect status: one connected account per conglomerate (§10). We
+  // only need whether it's linked to label the dashboard button; live KYC
+  // status comes back when the owner runs onboarding.
+  const [cg] = await sql<{ stripe_connect_account_id: string | null }[]>`
+    SELECT stripe_connect_account_id FROM conglomerates WHERE id = ${conglomerateId}`;
   return c.json({
     conglomerateId,
     balance: Number(balance?.balance ?? 0),
     breakdown: Object.fromEntries(breakdown.map((r) => [r.reason, Number(r.total)])),
+    connectAccountId: cg?.stripe_connect_account_id ?? null,
     subscription: sub
       ? { plan: sub.plan, status: sub.status, currentPeriodStart: sub.current_period_start }
       : null,
@@ -716,6 +731,27 @@ app.get("/api/conglomerates/:id/credits", requireAuth, async (c) => {
       createdAt: e.created_at,
     })),
   });
+});
+
+// §10 — Stripe Connect onboarding. One connected account per conglomerate (per
+// owner): the owner clicks "Connect your bank" and we hand back a one-time
+// Stripe onboarding URL to redirect to. Browser can't sign the gateway HMAC, so
+// the API authenticates the owner and forwards a platform-signed request.
+app.post("/api/conglomerates/:id/connect/onboard", requireAuth, async (c) => {
+  const conglomerateId = c.req.param("id");
+  if (!(await userIsMemberOfConglomerate(sql, c.get("userId"), conglomerateId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  const body = z
+    .object({ returnUrl: z.string().url(), refreshUrl: z.string().url().optional() })
+    .safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  const { status, body: out } = await gatewaySignedPost("/admin/connect/onboard", {
+    conglomerateId,
+    returnUrl: body.data.returnUrl,
+    refreshUrl: body.data.refreshUrl ?? body.data.returnUrl,
+  });
+  return c.json(out, status as 200);
 });
 
 // §10 — billing plans. Lago (when configured) mirrors subscriptions for

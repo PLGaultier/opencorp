@@ -4,6 +4,8 @@ import postgres from "postgres";
 import type { Ledger } from "@opencorp/ledgerd";
 import type { SecretStore } from "./secrets";
 import { paymentsFor } from "./providers/payments";
+import { adsFor, withinMonthlyCap } from "./providers/ads";
+import { monthlyAdSpendCents } from "./ads";
 import { emailFor, isValidAddress, listUnsubscribeHeader, syncInbox } from "./providers/email";
 import { getAnalytics } from "./providers/analytics";
 import { FetchBrowser } from "./providers/browser";
@@ -33,6 +35,14 @@ export interface ToolDef {
   /** Irreversible / money-out action: requires autonomy_level=full (§7.3). */
   gated?: boolean;
   /**
+   * Makes `bounded` autonomy meaningful for a gated tool (§14): when the company
+   * is `bounded`, run this check — `true` auto-approves (within the owner's
+   * budget cap), `false` parks for approval like `supervised`. `full` always
+   * runs; `supervised` always parks. Omitted → `bounded` behaves like
+   * `supervised` for this tool.
+   */
+  budgetGate?: (ctx: ToolContext, args: never) => Promise<boolean>;
+  /**
    * Executed inside the worker's own sandbox, not here (§7.1 code-mcp). The
    * gateway still authorizes + rate-limits + audits the call; the handler only
    * grants permission and agentd runs it locally.
@@ -44,6 +54,24 @@ export interface ToolDef {
 }
 
 type Registry = Record<string, Record<string, ToolDef>>;
+
+/** Resolve a company's conglomerate + connected Meta ad account (for ads-mcp). */
+async function adsContext(ctx: ToolContext): Promise<{ conglomerateId: string; metaAccount: string | null }> {
+  const [c] = await ctx.sql<{ conglomerate_id: string; meta_ad_account_id: string | null }[]>`
+    SELECT cm.conglomerate_id, cg.meta_ad_account_id
+    FROM companies cm JOIN conglomerates cg ON cg.id = cm.conglomerate_id
+    WHERE cm.id = ${ctx.companyId}`;
+  return { conglomerateId: c!.conglomerate_id, metaAccount: c?.meta_ad_account_id ?? null };
+}
+
+/** True when this company's month-to-date ad spend + a new budget fits the cap. */
+async function withinCapForBudget(ctx: ToolContext, budgetCents: number): Promise<boolean> {
+  const [c] = await ctx.sql<{ ad_monthly_budget_cap_cents: string }[]>`
+    SELECT ad_monthly_budget_cap_cents FROM companies WHERE id = ${ctx.companyId}`;
+  const cap = Number(c?.ad_monthly_budget_cap_cents ?? 0);
+  const spent = await monthlyAdSpendCents(ctx.sql, ctx.companyId);
+  return withinMonthlyCap(spent, budgetCents, cap);
+}
 
 const TaskPatch = z.object({
   taskId: z.string().uuid(),
@@ -282,14 +310,15 @@ export const registry: Registry = {
         const provider = await paymentsFor(ctx.companyId, ctx.secrets, ctx.checkoutBase);
         const { providerRef, paymentLink } = await provider.createProduct({
           productId,
+          companyId: ctx.companyId,
           slug: c!.slug,
           name: args.name,
           priceCents: args.priceCents,
           currency: args.currency,
         });
         await ctx.sql`
-          INSERT INTO products (id, company_id, name, price_cents, currency, provider_ref)
-          VALUES (${productId}, ${ctx.companyId}, ${args.name}, ${args.priceCents}, ${args.currency}, ${providerRef})`;
+          INSERT INTO products (id, company_id, name, price_cents, currency, provider_ref, payment_link)
+          VALUES (${productId}, ${ctx.companyId}, ${args.name}, ${args.priceCents}, ${args.currency}, ${providerRef}, ${paymentLink})`;
         await ctx.ledger.append({
           companyId: ctx.companyId,
           actor: `worker:${ctx.taskId}`,
@@ -327,15 +356,13 @@ export const registry: Registry = {
       write: false,
       async handler(ctx, args: { productId: string }) {
         const [c] = await ctx.sql<{ slug: string }[]>`SELECT slug FROM companies WHERE id = ${ctx.companyId}`;
-        const [p] = await ctx.sql<{ provider_ref: string | null }[]>`
-          SELECT provider_ref FROM products WHERE id = ${args.productId} AND company_id = ${ctx.companyId}`;
+        const [p] = await ctx.sql<{ payment_link: string | null }[]>`
+          SELECT payment_link FROM products WHERE id = ${args.productId} AND company_id = ${ctx.companyId}`;
         if (!p) return { error: "not_found" };
-        // Stripe links are stored in provider_ref; local links are deterministic.
-        const url =
-          p.provider_ref?.startsWith("stripe:")
-            ? undefined
-            : `${ctx.checkoutBase}/pay/${c!.slug}/${args.productId}`;
-        return { url: url ?? `${ctx.checkoutBase}/pay/${c!.slug}/${args.productId}` };
+        // The stored link is authoritative (Stripe's buy.stripe.com URL, or the
+        // local /checkout link). Older products predate the column → derive the
+        // deterministic local link as a fallback.
+        return { url: p.payment_link ?? `${ctx.checkoutBase}/pay/${c!.slug}/${args.productId}` };
       },
     },
     get_revenue: {
@@ -355,6 +382,169 @@ export const registry: Registry = {
           balanceCents: Number(c!.real_balance_cents),
           payments: Number(r!.count),
         };
+      },
+    },
+  },
+
+  // ── ads-mcp (§14 ads adapter) ─────────────────────────────────────────────
+  // Budgeted Meta/Google campaigns. The provider bills the owner's payment
+  // method directly; spend is mirrored to our ledger and bounded by the
+  // company's monthly cap. Campaigns are created PAUSED; launch + budget raises
+  // are money-out (gated): `bounded` auto-approves within the cap (budgetGate),
+  // `supervised` parks for approval, `full` always runs (§7.3).
+  ads: {
+    create_campaign: {
+      schema: z.object({
+        productId: z.string().uuid(),
+        name: z.string().min(1).max(200),
+        objective: z.enum(["OUTCOME_SALES", "OUTCOME_TRAFFIC", "OUTCOME_AWARENESS", "OUTCOME_LEADS"]).default("OUTCOME_SALES"),
+        budgetCents: z.number().int().min(100).max(100_000_000),
+        budgetType: z.enum(["daily", "lifetime"]).default("daily"),
+        creative: z.object({
+          headline: z.string().min(1).max(200),
+          body: z.string().min(1).max(2000),
+          imageUrl: z.string().url().optional(),
+        }),
+      }),
+      write: true,
+      async handler(
+        ctx,
+        args: {
+          productId: string;
+          name: string;
+          objective: string;
+          budgetCents: number;
+          budgetType: "daily" | "lifetime";
+          creative: { headline: string; body: string; imageUrl?: string };
+        },
+      ) {
+        const [p] = await ctx.sql<{ payment_link: string | null }[]>`
+          SELECT payment_link FROM products WHERE id = ${args.productId} AND company_id = ${ctx.companyId}`;
+        if (!p) return { error: "product_not_found" };
+        const campaignId = randomUUID();
+        const { conglomerateId, metaAccount } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        const linkUrl = p.payment_link ?? `${ctx.checkoutBase}/pay/${ctx.companyId}/${args.productId}`;
+        const { providerRef } = await ads.createCampaign({
+          campaignId,
+          name: args.name,
+          objective: args.objective,
+          budgetCents: args.budgetCents,
+          budgetType: args.budgetType,
+          creative: { ...args.creative, linkUrl },
+        });
+        await ctx.sql`
+          INSERT INTO ad_campaigns (id, company_id, product_id, provider, provider_ref, name, objective, status, budget_cents, budget_type, creative)
+          VALUES (${campaignId}, ${ctx.companyId}, ${args.productId}, ${ads.kind}, ${providerRef},
+                  ${args.name}, ${args.objective}, 'paused', ${args.budgetCents}, ${args.budgetType},
+                  ${ctx.sql.json({ ...args.creative, linkUrl })})`;
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "ad_campaign_created",
+          payload: { campaignId, productId: args.productId, objective: args.objective, budgetCents: args.budgetCents, budgetType: args.budgetType, provider: ads.kind },
+        });
+        return { campaignId, status: "paused", provider: ads.kind, note: "created paused — launch_campaign to go live (gated)" };
+      },
+    },
+    set_budget: {
+      schema: z.object({ campaignId: z.string().uuid(), budgetCents: z.number().int().min(100).max(100_000_000) }),
+      write: true,
+      gated: true, // money-out: a budget raise increases real spend
+      async budgetGate(ctx, args: { campaignId: string; budgetCents: number }) {
+        return withinCapForBudget(ctx, args.budgetCents);
+      },
+      async handler(ctx, args: { campaignId: string; budgetCents: number }) {
+        const [c] = await ctx.sql<{ provider_ref: string | null; budget_type: "daily" | "lifetime" }[]>`
+          SELECT provider_ref, budget_type FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        if (!c) return { error: "campaign_not_found" };
+        const { conglomerateId, metaAccount } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        if (c.provider_ref) await ads.setBudget(c.provider_ref, args.budgetCents, c.budget_type);
+        await ctx.sql`UPDATE ad_campaigns SET budget_cents = ${args.budgetCents} WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "ad_budget_set",
+          payload: { campaignId: args.campaignId, budgetCents: args.budgetCents },
+        });
+        return { updated: true, budgetCents: args.budgetCents };
+      },
+    },
+    launch_campaign: {
+      schema: z.object({ campaignId: z.string().uuid() }),
+      write: true,
+      gated: true, // money-out: PAUSED → ACTIVE starts spending
+      async budgetGate(ctx, args: { campaignId: string }) {
+        const [c] = await ctx.sql<{ budget_cents: string }[]>`
+          SELECT budget_cents FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        return c ? withinCapForBudget(ctx, Number(c.budget_cents)) : false;
+      },
+      async handler(ctx, args: { campaignId: string }) {
+        const [c] = await ctx.sql<{ provider_ref: string | null }[]>`
+          SELECT provider_ref FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        if (!c) return { error: "campaign_not_found" };
+        const { conglomerateId, metaAccount } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        if (c.provider_ref) await ads.launch(c.provider_ref);
+        await ctx.sql`UPDATE ad_campaigns SET status = 'active', launched_at = now() WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "ad_campaign_launched",
+          payload: { campaignId: args.campaignId },
+        });
+        return { launched: true, status: "active" };
+      },
+    },
+    pause_campaign: {
+      schema: z.object({ campaignId: z.string().uuid() }),
+      write: true, // always safe — pausing only ever reduces spend
+      async handler(ctx, args: { campaignId: string }) {
+        const [c] = await ctx.sql<{ provider_ref: string | null }[]>`
+          SELECT provider_ref FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        if (!c) return { error: "campaign_not_found" };
+        const { conglomerateId, metaAccount } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        if (c.provider_ref) await ads.pause(c.provider_ref);
+        await ctx.sql`UPDATE ad_campaigns SET status = 'paused' WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "ad_campaign_paused",
+          payload: { campaignId: args.campaignId, reason: "manual" },
+        });
+        return { paused: true };
+      },
+    },
+    list_campaigns: {
+      schema: z.object({}),
+      write: false,
+      async handler(ctx) {
+        return ctx.sql`
+          SELECT ac.id, ac.name, ac.objective, ac.status, ac.budget_cents, ac.budget_type, ac.product_id,
+                 COALESCE((SELECT SUM(spend_cents) FROM ad_spend s WHERE s.campaign_id = ac.id), 0) AS spend_cents
+          FROM ad_campaigns ac WHERE ac.company_id = ${ctx.companyId}
+          ORDER BY ac.created_at DESC LIMIT 100`;
+      },
+    },
+    get_campaign_insights: {
+      schema: z.object({ campaignId: z.string().uuid(), rangeDays: z.number().int().min(1).max(90).default(30) }),
+      write: false,
+      async handler(ctx, args: { campaignId: string; rangeDays: number }) {
+        const [c] = await ctx.sql<{ id: string }[]>`
+          SELECT id FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        if (!c) return { error: "campaign_not_found" };
+        const rows = await ctx.sql<{ day: string; spend_cents: string; impressions: string; clicks: string }[]>`
+          SELECT day, spend_cents, impressions, clicks FROM ad_spend
+          WHERE campaign_id = ${args.campaignId}
+            AND day >= ${new Date(Date.now() - args.rangeDays * 86_400_000).toISOString().slice(0, 10)}
+          ORDER BY day`;
+        const totals = rows.reduce(
+          (a, r) => ({ spendCents: a.spendCents + Number(r.spend_cents), impressions: a.impressions + Number(r.impressions), clicks: a.clicks + Number(r.clicks) }),
+          { spendCents: 0, impressions: 0, clicks: 0 },
+        );
+        return { campaignId: args.campaignId, totals, daily: rows.map((r) => ({ day: r.day, spendCents: Number(r.spend_cents), impressions: Number(r.impressions), clicks: Number(r.clicks) })) };
       },
     },
   },

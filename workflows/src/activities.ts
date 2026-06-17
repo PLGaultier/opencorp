@@ -72,11 +72,10 @@ export async function createForgejoRepo(slug: string): Promise<string | null> {
 }
 
 /**
- * Real mailbox per company (§6 step 2: "create Stalwart mailbox via JMAP admin
- * API"). The mailbox password is derived from the platform master secret —
- * nothing stored, so the activity is idempotent under Temporal retries (domain
- * and account creation both treat "already exists" as success). Optional in
- * dev: no STALWART_URL → the address stays a mirror-only identity.
+ * Per-company mailbox address. With Stalwart configured, creates a real JMAP
+ * mailbox (inbound + outbound). With just MAIL_DOMAIN set, assigns the address
+ * so Resend can send outbound from {slug}@{domain} (requires the domain to be
+ * verified in Resend). Both paths are idempotent under Temporal retries.
  */
 export async function provisionMailbox(input: {
   companyId: string;
@@ -84,18 +83,23 @@ export async function provisionMailbox(input: {
   name: string;
 }): Promise<string | null> {
   const cfg = stalwartEnv();
-  if (!cfg) return null; // optional in dev
-  const admin = new StalwartAdmin(cfg.url, cfg.adminUser, cfg.adminSecret);
-  await admin.ensureDomain(cfg.domain);
-  const address = `${input.slug}@${cfg.domain}`;
-  await admin.ensureMailbox(address, deriveMailboxPassword(cfg.masterSecret, address), input.name);
-  // The mail domain may differ from the web domain; the mailbox is authoritative.
+  const mailDomain = cfg?.domain ?? process.env.MAIL_DOMAIN;
+  if (!mailDomain) return null;
+
+  const address = `${input.slug}@${mailDomain}`;
+
+  if (cfg) {
+    const admin = new StalwartAdmin(cfg.url, cfg.adminUser, cfg.adminSecret);
+    await admin.ensureDomain(cfg.domain);
+    await admin.ensureMailbox(address, deriveMailboxPassword(cfg.masterSecret, address), input.name);
+  }
+
   await sql`UPDATE companies SET email_address = ${address} WHERE id = ${input.companyId}`;
   await ledger.append({
     companyId: input.companyId,
     actor: "system",
     eventType: "mailbox_provisioned",
-    payload: { address, transport: "stalwart" },
+    payload: { address, transport: cfg ? "stalwart" : "resend" },
   });
   return address;
 }

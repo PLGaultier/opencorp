@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import postgres from "postgres";
 import { z } from "zod";
@@ -10,6 +10,9 @@ import { secretStoreFromEnv, infisicalEnv, InfisicalClient, InfisicalAdmin } fro
 import { FetchBrowser } from "./providers/browser";
 import { recordPayment } from "./revenue";
 import { processWithdrawal } from "./payout";
+import { ensureConnectOnboarding } from "./connect";
+import { syncCompanyAdSpend } from "./ads";
+import { verifyStripeSignature, parseCheckoutCompleted, fetchStripeFeeCents } from "./providers/stripe-webhook";
 import { requestApproval, resolveApproval, notifyOwnerOfApproval } from "./approvals";
 
 /**
@@ -36,8 +39,11 @@ export function createGateway(opts?: {
   const limiter = new MemoryRateLimiter();
   const secrets = secretStoreFromEnv();
   const browser = new FetchBrowser();
+  // The gateway serves the local checkout page itself (it owns the DB + ledger
+  // + recordPayment), so the default base is the gateway's own /checkout, not
+  // deployd's. Stripe-mode links come from Stripe and ignore this entirely.
   const checkoutBase =
-    opts?.checkoutBase ?? process.env.CHECKOUT_BASE_URL ?? "http://localhost:3002/checkout";
+    opts?.checkoutBase ?? process.env.CHECKOUT_BASE_URL ?? "http://localhost:3004/checkout";
 
   // lazy per-company DB connections (PgBouncer takes over in prod)
   const companyDbs = new Map<string, postgres.Sql>();
@@ -100,10 +106,17 @@ export function createGateway(opts?: {
     // Safety gate (§7.3): irreversible / money-out tools below autonomy_level=
     // full don't execute — they park as a pending approval and the agent moves
     // on. An owner approves it later (the gateway then runs the handler).
+    // `bounded` is the middle ground (§14): a gated tool with a budgetGate runs
+    // autonomously when it stays within the owner's cap, else parks like
+    // `supervised`.
     if (def.gated) {
       const [comp] = await sql<{ autonomy_level: string }[]>`
         SELECT autonomy_level FROM companies WHERE id = ${scope.companyId}`;
-      if (comp?.autonomy_level !== "full") {
+      let allowed = comp?.autonomy_level === "full";
+      if (!allowed && comp?.autonomy_level === "bounded" && def.budgetGate) {
+        allowed = await def.budgetGate(buildCtx(scope.companyId, scope.taskId), parsed.data as never).catch(() => false);
+      }
+      if (!allowed) {
         const { approvalId, reused } = await requestApproval(sql, ledger, {
           companyId: scope.companyId,
           taskId: scope.taskId,
@@ -189,6 +202,135 @@ export function createGateway(opts?: {
     return c.json(await recordPayment(sql, ledger, parsed.data));
   });
 
+  // ── Local checkout page (§10, MVP) ────────────────────────────────────────
+  // In local mode the payment link points here. There's no real acquirer, so
+  // this is the human-clickable "buy" page: GET renders it, POST records the
+  // sale straight through recordPayment (in-process — no HMAC hop needed). This
+  // is the only money path that touches a person; Stripe mode never hits it.
+  const money = (cents: number, currency: string) =>
+    new Intl.NumberFormat("en", { style: "currency", currency: currency.toUpperCase() }).format(cents / 100);
+
+  const checkoutPage = (opts: {
+    title: string;
+    company: string;
+    body: string;
+  }) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${opts.title} — ${opts.company}</title>
+<style>
+  :root{color-scheme:light dark}
+  body{font:16px/1.5 system-ui,sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;background:#0b0b0f;color:#e8e8ea}
+  .card{background:#16161c;border:1px solid #26262e;border-radius:14px;padding:2rem;max-width:380px;width:90%}
+  h1{font-size:1.1rem;margin:0 0 .25rem}
+  .co{color:#8a8a92;font-size:.85rem;margin:0 0 1.5rem}
+  .price{font-size:2rem;font-weight:700;margin:0 0 1.5rem}
+  button{width:100%;padding:.85rem;border:0;border-radius:10px;background:#635bff;color:#fff;font-size:1rem;font-weight:600;cursor:pointer}
+  button:hover{background:#5249e0}
+  .note{color:#6a6a72;font-size:.75rem;text-align:center;margin:1rem 0 0}
+  .ok{color:#34d399;font-size:2.5rem;text-align:center;margin:0 0 .5rem}
+</style></head><body><div class="card">${opts.body}</div></body></html>`;
+
+  // Resolve a (slug, productId) to a payable product; shared by GET and POST.
+  const resolveProduct = async (slug: string, productId: string) => {
+    const [row] = await sql<
+      { company_id: string; company_name: string; name: string; price_cents: string; currency: string }[]
+    >`
+      SELECT c.id AS company_id, c.name AS company_name, p.name, p.price_cents, p.currency
+      FROM products p JOIN companies c ON c.id = p.company_id
+      WHERE p.id = ${productId} AND c.slug = ${slug}`;
+    return row ?? null;
+  };
+
+  app.get("/checkout/pay/:slug/:productId", async (c) => {
+    const { slug, productId } = c.req.param();
+    const p = await resolveProduct(slug, productId);
+    if (!p) return c.html(checkoutPage({ title: "Not found", company: "OpenCorp", body: `<h1>Product not found</h1>` }), 404);
+    const price = money(Number(p.price_cents), p.currency);
+    return c.html(
+      checkoutPage({
+        title: "Checkout",
+        company: p.company_name,
+        body: `<h1>${p.name}</h1><p class="co">${p.company_name}</p>
+          <p class="price">${price}</p>
+          <form method="post"><button type="submit">Pay ${price}</button></form>
+          <p class="note">Local checkout — no real card is charged.</p>`,
+      }),
+    );
+  });
+
+  app.post("/checkout/pay/:slug/:productId", async (c) => {
+    const { slug, productId } = c.req.param();
+    const p = await resolveProduct(slug, productId);
+    if (!p) return c.html(checkoutPage({ title: "Not found", company: "OpenCorp", body: `<h1>Product not found</h1>` }), 404);
+    const result = await recordPayment(sql, ledger, {
+      companyId: p.company_id,
+      productId,
+      amountCents: Number(p.price_cents),
+      currency: p.currency,
+      // Each checkout submit is a distinct sale; uniqueness keeps it idempotent
+      // per click while still allowing the same product to sell repeatedly.
+      providerRef: `local:checkout:${randomUUID()}`,
+      feeCents: 0,
+    });
+    const price = money(Number(p.price_cents), p.currency);
+    return c.html(
+      checkoutPage({
+        title: "Payment received",
+        company: p.company_name,
+        body: `<div class="ok">✓</div><h1>Payment received</h1>
+          <p class="co">${p.company_name} — ${p.name}</p>
+          <p class="price">${price}</p>
+          <p class="note">${result.recorded ? "Recorded on the public ledger." : "Already recorded."}</p>`,
+      }),
+    );
+  });
+
+  // ── Stripe webhook (§9.4, §10) ────────────────────────────────────────────
+  // The real-money mirror. Stripe POSTs checkout.session.completed here; we
+  // verify its signature against STRIPE_WEBHOOK_SECRET, map the session back to
+  // our company/product (via the originating payment link, metadata as backup),
+  // pull the real processing fee, and record it. Idempotent on the event id.
+  app.post("/webhooks/stripe", async (c) => {
+    const secret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!secret) return c.json({ error: "stripe_webhook_not_configured" }, 503);
+    const raw = await c.req.text();
+    if (!verifyStripeSignature(raw, c.req.header("stripe-signature"), secret)) {
+      return c.json({ error: "bad_signature" }, 401);
+    }
+    const checkout = parseCheckoutCompleted(JSON.parse(raw || "{}"));
+    if (!checkout) return c.json({ ignored: true }); // 200 so Stripe stops retrying
+
+    // Map the payment back to us: prefer the originating payment link
+    // (provider_ref = stripe:{productId}:{linkId}), fall back to metadata.
+    let companyId = checkout.metadata.companyId ?? null;
+    let productId: string | null = checkout.metadata.productId ?? null;
+    if (checkout.paymentLink) {
+      const [row] = await sql<{ id: string; company_id: string }[]>`
+        SELECT id, company_id FROM products
+        WHERE provider_ref LIKE ${"stripe:%:" + checkout.paymentLink}`;
+      if (row) {
+        productId = row.id;
+        companyId = row.company_id;
+      }
+    }
+    if (!companyId) return c.json({ error: "unmapped_payment" }, 422);
+
+    const key = await secrets.get(companyId, "STRIPE_SECRET_KEY");
+    const feeCents = checkout.paymentIntent && key
+      ? await fetchStripeFeeCents(checkout.paymentIntent, key)
+      : 0;
+
+    const result = await recordPayment(sql, ledger, {
+      companyId,
+      productId,
+      amountCents: checkout.amountCents,
+      currency: checkout.currency,
+      providerRef: `stripe:evt:${checkout.eventId}`,
+      feeCents,
+    });
+    return c.json(result);
+  });
+
   // Money-out (§10). User-initiated from the dashboard; the durable Withdrawal
   // workflow calls this so retries are safe (idempotent on withdrawalId).
   const WithdrawBody = z.object({
@@ -213,6 +355,45 @@ export function createGateway(opts?: {
       conglomerateId: co.conglomerate_id,
     });
     return c.json(result, result.status === "failed" ? 422 : 200);
+  });
+
+  // Connect Express onboarding (§10). One connected account per conglomerate
+  // (per owner) — KYC + bank account live on the human. Owner-initiated from
+  // the dashboard; signed by the platform like the other admin routes. Returns
+  // a one-time Stripe onboarding URL (or a local stub when Connect is off).
+  const ConnectBody = z.object({
+    conglomerateId: z.string().uuid(),
+    returnUrl: z.string().url(),
+    refreshUrl: z.string().url(),
+  });
+
+  app.post("/admin/connect/onboard", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
+    const parsed = ConnectBody.safeParse(JSON.parse(raw || "{}"));
+    if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+    try {
+      return c.json(await ensureConnectOnboarding(sql, secrets, parsed.data));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "onboard_failed", message }, message === "conglomerate_not_found" ? 404 : 502);
+    }
+  });
+
+  // Ad-spend sync + budget-cap auto-pause (§14). Called by the CompanyHeartbeat
+  // activity each cycle; signed by the platform like the other admin routes.
+  // Idempotent (upsert on campaign+day), so Temporal retries are safe.
+  app.post("/admin/ads/sync", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
+    const parsed = z.object({ companyId: z.string().uuid() }).safeParse(JSON.parse(raw || "{}"));
+    if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+    try {
+      return c.json(await syncCompanyAdSpend(sql, ledger, secrets, parsed.data.companyId));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: "sync_failed", message }, message === "company_not_found" ? 404 : 502);
+    }
   });
 
   // Set a per-company secret in the vault (§3). Owner-initiated from the

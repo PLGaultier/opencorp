@@ -29,7 +29,7 @@ export interface OutboundEmail {
 }
 
 export interface EmailProvider {
-  readonly kind: "stalwart" | "local";
+  readonly kind: "stalwart" | "resend" | "local";
   send(msg: OutboundEmail): Promise<{ messageId: string }>;
   fetchInbox(limit?: number): Promise<InboundMessage[]>;
 }
@@ -64,16 +64,73 @@ class StalwartEmail implements EmailProvider {
 }
 
 /**
- * Resolve the company's transport. The mailbox password is derived from the
- * platform master secret (never stored, see @opencorp/stalwart derive.ts);
- * per-company SecretStore entries can override the platform URL/master for
- * BYO-mail setups. No config → local mode (zero-external-accounts contract).
+ * Resend HTTP relay (§12 deliverability). Send-only (inbound stays on
+ * Stalwart/local). Two modes:
+ *  - RESEND_FROM set: sends from that address, company address as Reply-To.
+ *    Use when the sending domain is not verified in Resend (e.g. shared test
+ *    sender "onboarding@resend.dev" — only delivers to your own Resend email).
+ *  - RESEND_FROM unset: sends from msg.from directly (e.g. slug@yourdomain.com).
+ *    Requires the domain to be verified once in the Resend dashboard. Gives each
+ *    company its own real address visible to recipients.
+ */
+class ResendEmail implements EmailProvider {
+  readonly kind = "resend";
+  constructor(
+    private apiKey: string,
+    private sender?: string, // undefined = use msg.from (verified domain required)
+  ) {}
+
+  async send(msg: OutboundEmail): Promise<{ messageId: string }> {
+    const from = this.sender
+      ? `${msg.from.split("@")[0] || "OpenCorp"} <${this.sender}>`
+      : msg.from;
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        from,
+        ...(this.sender ? { reply_to: msg.from } : {}),
+        to: msg.to,
+        subject: msg.subject,
+        text: msg.text,
+        html: msg.html,
+        headers: msg.headers,
+      }),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      id?: string;
+      message?: string;
+      name?: string;
+    };
+    if (!res.ok || !data.id) {
+      throw new Error(`resend send failed: ${res.status} ${data.message ?? data.name ?? ""}`.trim());
+    }
+    return { messageId: `resend:${data.id}` };
+  }
+
+  async fetchInbox(): Promise<InboundMessage[]> {
+    return [];
+  }
+}
+
+/**
+ * Resolve the company's transport. Priority: Resend relay (real external
+ * delivery) → Stalwart JMAP (self-hosted) → local mirror (nothing leaves). The
+ * mailbox password is derived from the platform master secret (never stored,
+ * see @opencorp/stalwart derive.ts); per-company SecretStore entries can
+ * override platform URL/master/keys for BYO-mail setups.
  */
 export async function emailFor(
   companyId: string,
   secrets: SecretStore,
   accountEmail: string,
 ): Promise<EmailProvider> {
+  const resendKey = (await secrets.get(companyId, "RESEND_API_KEY")) ?? process.env.RESEND_API_KEY;
+  if (resendKey) {
+    const sender =
+      (await secrets.get(companyId, "RESEND_FROM")) ?? process.env.RESEND_FROM;
+    return new ResendEmail(resendKey, sender); // sender undefined → sends from msg.from directly
+  }
   const env = stalwartEnv();
   const url = (await secrets.get(companyId, "STALWART_URL")) ?? env?.url;
   const master = (await secrets.get(companyId, "STALWART_MASTER_SECRET")) ?? env?.masterSecret;

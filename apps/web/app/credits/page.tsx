@@ -19,6 +19,7 @@ interface CreditData {
   conglomerateId: string;
   balance: number;
   breakdown: Record<string, number>;
+  connectAccountId: string | null;
   subscription: { plan: string; status: string; currentPeriodStart: string | null } | null;
   entries: CreditEntry[];
 }
@@ -54,6 +55,8 @@ export default function CreditsPage() {
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const [subError, setSubError] = useState<string | null>(null);
   const [subDone, setSubDone] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [connectMsg, setConnectMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!API_URL || isPending || !session) { setLoading(false); return; }
@@ -105,6 +108,39 @@ export default function CreditsPage() {
       setSubError("API unreachable");
     }
     setSubscribing(null);
+  };
+
+  const connectBank = async () => {
+    if (!data) return;
+    setConnecting(true);
+    setConnectMsg(null);
+    try {
+      const res = await fetch(`${API_URL}/api/conglomerates/${data.conglomerateId}/connect/onboard`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        // Stripe sends the owner back here after finishing / to retry.
+        body: JSON.stringify({ returnUrl: window.location.href }),
+      });
+      const d = (await res.json()) as {
+        mode?: string;
+        onboardingUrl?: string | null;
+        message?: string;
+        error?: string;
+      };
+      if (!res.ok) {
+        setConnectMsg(d.message ?? d.error ?? "Couldn't start onboarding.");
+      } else if (d.mode === "stripe" && d.onboardingUrl) {
+        window.location.href = d.onboardingUrl; // hand off to Stripe-hosted KYC
+      } else {
+        // Local mode (no platform Stripe key) — Connect is off; payouts use the
+        // local rail. Surface the gateway's explanation instead of redirecting.
+        setConnectMsg(d.message ?? "Stripe Connect is not enabled on this instance.");
+      }
+    } catch {
+      setConnectMsg("API unreachable");
+    }
+    setConnecting(false);
   };
 
   // ── Demo / unauthenticated states ──────────────────────────────────────────
@@ -182,6 +218,28 @@ export default function CreditsPage() {
           <b style={{ textTransform: "capitalize" }}>{currentPlan}</b>
         </div>
       </div>
+
+      {/* Payouts — one Stripe Connect account per conglomerate */}
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Payouts</h2>
+        <p className="sub" style={{ marginTop: "0.25rem" }}>
+          Connect a bank account to withdraw your companies&apos; revenue. One account
+          covers every company in your conglomerate — Stripe handles identity verification.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.75rem" }}>
+          <button className="btn primary" onClick={connectBank} disabled={connecting}>
+            {connecting
+              ? "…"
+              : data.connectAccountId
+                ? "Manage payout account"
+                : "Connect your bank"}
+          </button>
+          {data.connectAccountId && (
+            <span className="saved" style={{ margin: 0 }}>Bank linked ✓</span>
+          )}
+        </div>
+        {connectMsg && <p className="sub" style={{ marginTop: "0.5rem" }}>{connectMsg}</p>}
+      </section>
 
       {/* Plans */}
       {plans.length > 0 && (
@@ -276,6 +334,15 @@ function DemoCreditView() {
         <div><span>Task charges</span><b>1.00</b></div>
         <div><span>Plan</span><b>Free</b></div>
       </div>
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Payouts</h2>
+        <p className="sub" style={{ marginTop: "0.25rem" }}>
+          Connect a bank account to withdraw revenue — one account per conglomerate.
+        </p>
+        <button className="btn primary" style={{ marginTop: "0.75rem" }} disabled>
+          Connect your bank
+        </button>
+      </section>
       <section style={{ marginTop: "2rem" }}>
         <h2 style={{ fontSize: "1.05rem" }}>Plans</h2>
         <div className="plan-grid">

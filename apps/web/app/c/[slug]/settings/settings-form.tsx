@@ -10,6 +10,7 @@ interface Settings {
   dailyTaskCap: number;
   autonomyLevel: "supervised" | "bounded" | "full";
   isPublic: boolean;
+  adMonthlyBudgetCapCents: number;
 }
 
 export function SettingsForm({ companyId, initial }: { companyId: string; initial: Settings }) {
@@ -116,10 +117,27 @@ export function SettingsForm({ companyId, initial }: { companyId: string; initia
             setForm({ ...form, autonomyLevel: e.target.value as Settings["autonomyLevel"] })
           }
         >
-          <option value="supervised">supervised — irreversible actions blocked</option>
-          <option value="bounded">bounded — irreversible actions blocked</option>
+          <option value="supervised">supervised — irreversible actions need approval</option>
+          <option value="bounded">bounded — agents may run ads within the budget cap below; other irreversible actions need approval</option>
           <option value="full">full — agents may take irreversible actions</option>
         </select>
+      </label>
+
+      <label className="field">
+        <span className="sub">
+          Monthly ad budget cap (€ per month). Under &quot;bounded&quot; autonomy, agents may
+          launch and budget Meta ad campaigns up to this — spend beyond it auto-pauses campaigns
+          and needs your approval. 0 disables ads.
+        </span>
+        <input
+          type="number"
+          min={0}
+          step="1"
+          value={(form.adMonthlyBudgetCapCents / 100).toString()}
+          onChange={(e) =>
+            setForm({ ...form, adMonthlyBudgetCapCents: Math.round(Number(e.target.value || 0) * 100) })
+          }
+        />
       </label>
 
       <label className="field check">

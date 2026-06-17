@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import postgres from "postgres";
 import { heartbeat } from "@temporalio/activity";
 import { signToken } from "@opencorp/mcp-client";
@@ -28,6 +29,7 @@ import {
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp";
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3004";
+const GATEWAY_SECRET = process.env.GATEWAY_SECRET ?? "dev-gateway-secret";
 
 const sql = postgres(DATABASE_URL, { max: 5 });
 const ledger = new Ledger(new PgStore(DATABASE_URL));
@@ -328,4 +330,23 @@ export async function postDailyBrief(companyId: string, brief: string): Promise<
     eventType: "daily_brief",
     payload: { brief },
   });
+}
+
+/**
+ * Ad-spend sync (§14): a thin signed call to the gateway, which mirrors each
+ * active campaign's spend into the ledger and auto-pauses at the monthly cap.
+ * Run each heartbeat so the CEO sees fresh spend and the cap is enforced even
+ * between worker tasks. Idempotent in the gateway, so retries are safe.
+ */
+export async function syncAdSpend(companyId: string): Promise<{ autoPaused: number; monthToDateCents: number }> {
+  const raw = JSON.stringify({ companyId });
+  const sig = createHmac("sha256", GATEWAY_SECRET).update(raw).digest("hex");
+  const res = await fetch(`${GATEWAY_URL}/admin/ads/sync`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-opencorp-sig": sig },
+    body: raw,
+  });
+  if (res.status >= 500) throw new Error(`gateway ads sync ${res.status}`);
+  const body = (await res.json().catch(() => ({}))) as { autoPaused?: number; monthToDateCents?: number };
+  return { autoPaused: body.autoPaused ?? 0, monthToDateCents: body.monthToDateCents ?? 0 };
 }
