@@ -21,6 +21,14 @@ describe("renderLanding", () => {
     expect(html).toContain("/c/synth-co");
   });
 
+  test("links the house design system and uses its classes, not inline styles", () => {
+    const html = renderLanding({ companyName: "Synth Co", slug: "synth-co", copy });
+    expect(html).toContain('<link rel="stylesheet" href="design-system.css">');
+    expect(html).toContain('class="section hero"');
+    expect(html).toContain('class="btn btn--lg"');
+    expect(html).not.toContain("<style>"); // styling lives in the design system
+  });
+
   test("includes umami snippet only when configured", () => {
     const without = renderLanding({ companyName: "X", slug: "x-co", copy });
     expect(without).not.toContain("data-website-id");
@@ -46,6 +54,16 @@ describe("publishSite", () => {
     await publishSite({ slug: "synth-co", files: { "index.html": "v1" } });
     await publishSite({ slug: "synth-co", files: { "index.html": "v2" } });
     expect(await readFile(join(dir, "synth-co", "index.html"), "utf8")).toBe("v2");
+  });
+
+  test("always drops the canonical design system into every site", async () => {
+    await publishSite({ slug: "synth-co", files: { "index.html": "v1" } });
+    const css = await readFile(join(dir, "synth-co", "design-system.css"), "utf8");
+    expect(css).toContain("--primary");
+    expect(css).toContain(".btn");
+    // an agent-supplied copy can't override the house style
+    await publishSite({ slug: "synth-co", files: { "design-system.css": "/* hijack */" } });
+    expect(await readFile(join(dir, "synth-co", "design-system.css"), "utf8")).not.toContain("hijack");
   });
 
   test("rejects path escapes and bad slugs", async () => {

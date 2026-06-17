@@ -28,18 +28,23 @@ export function renderLanding(input: LandingInput): string {
     input.umamiSiteId && input.umamiUrl
       ? `<script defer src="${esc(input.umamiUrl)}/script.js" data-website-id="${esc(input.umamiSiteId)}"></script>`
       : "";
+  // Each section: one headline + one paragraph (Marc's "one headline per
+  // section"), alternating background for rhythm. All spacing comes from the
+  // design-system tokens — no inline styles here.
   const sections = copy.sections
     .map(
-      (s) => `
-      <section>
-        <h2>${esc(s.title)}</h2>
-        <p>${esc(s.body)}</p>
-      </section>`,
+      (s, i) => `
+  <section class="section${i % 2 === 1 ? " section--alt" : ""}">
+    <div class="container stack">
+      <h2>${esc(s.title)}</h2>
+      <p>${esc(s.body)}</p>
+    </div>
+  </section>`,
     )
     .join("\n");
   const contact = input.emailAddress
-    ? `<a class="cta" href="mailto:${esc(input.emailAddress)}">${esc(copy.cta)}</a>`
-    : `<a class="cta" href="#contact">${esc(copy.cta)}</a>`;
+    ? `<a class="btn btn--lg" href="mailto:${esc(input.emailAddress)}">${esc(copy.cta)}</a>`
+    : `<a class="btn btn--lg" href="#contact">${esc(copy.cta)}</a>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -47,32 +52,30 @@ export function renderLanding(input: LandingInput): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(input.companyName)}</title>
 <meta name="description" content="${esc(copy.subheadline)}">
+<link rel="stylesheet" href="design-system.css">
 ${umami}
-<style>
-  :root { color-scheme: light dark; }
-  body { font-family: system-ui, sans-serif; margin: 0; line-height: 1.6; }
-  main { max-width: 720px; margin: 0 auto; padding: 4rem 1.5rem; }
-  h1 { font-size: 2.5rem; margin-bottom: .5rem; }
-  .sub { font-size: 1.2rem; opacity: .8; }
-  .cta { display: inline-block; margin: 1.5rem 0; padding: .75rem 1.5rem;
-         background: #111; color: #fff; border-radius: 8px; text-decoration: none; }
-  @media (prefers-color-scheme: dark) { .cta { background: #fff; color: #111; } }
-  section { margin-top: 2.5rem; }
-  footer { margin-top: 4rem; font-size: .85rem; opacity: .6; }
-</style>
 </head>
 <body>
+<header class="container">
+  <nav class="nav"><a class="brand" href="/">${esc(input.companyName)}</a></nav>
+</header>
 <main>
-  <h1>${esc(copy.headline)}</h1>
-  <p class="sub">${esc(copy.subheadline)}</p>
-  ${contact}
+  <section class="section hero">
+    <div class="container">
+      <h1>${esc(copy.headline)}</h1>
+      <p class="sub">${esc(copy.subheadline)}</p>
+      ${contact}
+    </div>
+  </section>
   ${sections}
-  <footer>
-    <p>${esc(input.companyName)} — an autonomous company on
-    <a href="https://github.com/opencorp">OpenCorp</a>.
-    Every action it takes is on a <a href="/c/${esc(input.slug)}">public ledger</a>.</p>
-  </footer>
 </main>
+<footer class="footer">
+  <div class="container">
+    ${esc(input.companyName)} — an autonomous company on
+    <a href="https://github.com/opencorp">OpenCorp</a>.
+    Every action it takes is on a <a href="/c/${esc(input.slug)}">public ledger</a>.
+  </div>
+</footer>
 </body>
 </html>`;
 }
