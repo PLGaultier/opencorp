@@ -14,7 +14,7 @@
 export const DESIGN_SYSTEM_FILENAME = "design-system.css";
 
 /** Bump when the CSS changes so caches and audits can tell versions apart. */
-export const DESIGN_SYSTEM_VERSION = "1.0.0";
+export const DESIGN_SYSTEM_VERSION = "1.1.0";
 
 export const DESIGN_SYSTEM_CSS = `/* OpenCorp design system v${DESIGN_SYSTEM_VERSION} — house style (Marc Lou rules). Do not redefine tokens; use the classes. */
 :root {
@@ -23,11 +23,19 @@ export const DESIGN_SYSTEM_CSS = `/* OpenCorp design system v${DESIGN_SYSTEM_VER
   --primary: #2563eb;            /* the single call-to-action color */
   --primary-hover: #1d4ed8;
   --primary-content: #ffffff;    /* text on primary */
+  --accent: #f59e0b;             /* warm spark: highlights, stars, marker (not a 2nd CTA) */
   --base-100: #ffffff;           /* page background */
   --base-200: #f4f4f5;           /* cards / alternating sections */
   --base-300: #e4e4e7;           /* borders / dividers */
   --base-content: #18181b;       /* headlines & emphasis (strongest contrast) */
   --base-content-secondary: #52525b; /* body text (softer, builds hierarchy) */
+
+  /* Elevation — soft shadows make a flat page feel premium (the easy win). */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, .06), 0 1px 3px rgba(15, 23, 42, .08);
+  --shadow: 0 4px 16px rgba(15, 23, 42, .08);
+  --shadow-lg: 0 24px 60px -16px rgba(15, 23, 42, .28);
+  /* Soft tinted glow behind the hero. */
+  --hero-glow: radial-gradient(60% 60% at 50% 0%, color-mix(in srgb, var(--primary) 16%, transparent), transparent 70%);
 
   /* Spacing — 4-point grid; every gap is divisible by 4. */
   --space-1: 4px;  --space-2: 8px;  --space-3: 16px; --space-4: 32px;
@@ -57,8 +65,10 @@ export const DESIGN_SYSTEM_CSS = `/* OpenCorp design system v${DESIGN_SYSTEM_VER
 @media (prefers-color-scheme: dark) {
   :root {
     --primary: #3b82f6; --primary-hover: #60a5fa; --primary-content: #0b0b0f;
+    --accent: #fbbf24;
     --base-100: #18181b; --base-200: #27272a; --base-300: #3f3f46;
     --base-content: #fafafa; --base-content-secondary: #a1a1aa;
+    --shadow-lg: 0 24px 60px -16px rgba(0, 0, 0, .6);
   }
 }
 
@@ -107,8 +117,8 @@ p strong, p b, .emphasis { color: var(--base-content); font-weight: 600; }
 .mt-button { margin-top: var(--gap-button); }
 .mt-image { margin-top: var(--gap-image); }
 
-/* Hero — one headline, one sub, one CTA, centered, generous space. */
-.hero { text-align: center; }
+/* Hero — one headline, one sub, one CTA, centered, generous space, soft glow. */
+.hero { text-align: center; position: relative; background: var(--hero-glow); }
 .hero .sub { font-size: 1.25rem; max-width: 40ch; margin-inline: auto; margin-top: var(--gap-headline); }
 .hero .btn { margin-top: var(--gap-button); }
 
@@ -118,15 +128,16 @@ p strong, p b, .emphasis { color: var(--base-content); font-weight: 600; }
   background: var(--primary); color: var(--primary-content);
   font: inherit; font-weight: 600; text-decoration: none;
   padding: 12px 24px; border-radius: var(--radius-sm);
-  transition: background .15s ease, transform .15s ease;
+  box-shadow: var(--shadow-sm);
+  transition: background .15s ease, transform .15s ease, box-shadow .15s ease;
 }
-.btn:hover { background: var(--primary-hover); }
-.btn:active { transform: translateY(1px); }
+.btn:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: var(--shadow); }
+.btn:active { transform: translateY(0); }
 .btn--lg { padding: 16px 32px; font-size: 1.125rem; }
 .btn--ghost { background: transparent; color: var(--base-content); border: 1px solid var(--base-300); }
 
 /* Cards / grid */
-.card { background: var(--base-200); border: 1px solid var(--base-300); border-radius: var(--radius); padding: var(--space-4); }
+.card { background: var(--base-100); border: 1px solid var(--base-300); border-radius: var(--radius); padding: var(--space-4); box-shadow: var(--shadow-sm); }
 .grid { display: grid; gap: var(--space-4); }
 .grid--2 { grid-template-columns: repeat(2, 1fr); }
 .grid--3 { grid-template-columns: repeat(3, 1fr); }
@@ -148,10 +159,68 @@ p strong, p b, .emphasis { color: var(--base-content); font-weight: 600; }
 .faq summary::-webkit-details-marker { display: none; }
 .faq p { margin-top: var(--space-2); }
 
-/* Nav / footer */
+/* Nav / footer — sticky, blurred header keeps the CTA in reach on scroll. */
+.site-header { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--base-100) 80%, transparent); backdrop-filter: saturate(180%) blur(10px); border-bottom: 1px solid var(--base-300); }
 .nav { display: flex; align-items: center; justify-content: space-between; padding-block: var(--space-3); }
-.nav .brand { color: var(--base-content); font-weight: 700; text-decoration: none; }
+.nav .brand { color: var(--base-content); font-weight: 700; text-decoration: none; font-size: 1.1rem; }
 .footer { border-top: 1px solid var(--base-300); padding-block: var(--space-5); color: var(--base-content-secondary); font-size: .9rem; }
+
+/* ── Appeal upgrades v1.1 (DataFast easy-wins) ───────────────────────────── */
+
+/* Highlighted keyword — Marc's signature marker swipe under one word in a
+   headline. Wrap the word: <h1>Grow <span class="highlight">faster</span></h1> */
+.highlight {
+  background-image: linear-gradient(120deg, transparent 0 8%, color-mix(in srgb, var(--accent) 55%, transparent) 8% 92%, transparent 92%);
+  background-repeat: no-repeat; background-size: 100% 45%; background-position: 0 78%;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; padding: 0 .05em;
+}
+/* Or tint the word in the brand gradient. */
+.text-gradient {
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* Badge — pill with an accent tint + icon, for "Featured on", "New", awards. */
+.badge {
+  display: inline-flex; align-items: center; gap: .4em;
+  background: color-mix(in srgb, var(--accent) 16%, var(--base-100));
+  color: var(--base-content); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  padding: 6px 14px; border-radius: 999px; font-size: .85rem; font-weight: 600;
+}
+
+/* Social proof — overlapping avatar row + stars + count (the hero clincher). */
+.social-proof { display: inline-flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; justify-content: center; }
+.avatars { display: inline-flex; }
+.avatars .avatar { margin-left: -12px; border: 2px solid var(--base-100); }
+.avatars .avatar:first-child { margin-left: 0; }
+.social-proof .count { color: var(--base-content-secondary); font-size: .95rem; }
+.social-proof .count b { color: var(--base-content); }
+
+/* Reassurance microcopy under a CTA — "No card required", "$0 due today". */
+.reassure { color: var(--base-content-secondary); font-size: .85rem; margin-top: var(--space-2); }
+
+/* Stat callouts — big numbers earn trust. */
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4); }
+.stat .num { display: block; font-size: 2.5rem; font-weight: var(--weight-head); color: var(--base-content); letter-spacing: -.02em; }
+.stat .label { color: var(--base-content-secondary); }
+@media (max-width: 720px) { .stats { grid-template-columns: 1fr; } }
+
+/* Framed product screenshot — rounded, bordered, big soft shadow, faux browser
+   bar. <div class="app-frame"><div class="bar"></div><img ...></div> */
+.app-frame { border: 1px solid var(--base-300); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-lg); background: var(--base-200); max-width: 980px; margin-inline: auto; }
+.app-frame .bar { display: flex; gap: 6px; padding: 12px 16px; background: var(--base-200); border-bottom: 1px solid var(--base-300); }
+.app-frame .bar::before, .app-frame .bar::after { content: ""; width: 12px; height: 12px; border-radius: 999px; background: var(--base-300); }
+.app-frame .bar::after { box-shadow: 20px 0 var(--base-300), 40px 0 var(--base-300); }
+.app-frame img { width: 100%; display: block; }
+
+/* Featured pricing card — primary border + ribbon to anchor the choice. */
+.card--featured { border: 2px solid var(--primary); box-shadow: var(--shadow); position: relative; }
+.ribbon { position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--primary); color: var(--primary-content); font-size: .8rem; font-weight: 700; padding: 4px 14px; border-radius: 999px; }
+
+/* Founder note — photo + first-person story builds indie trust. */
+.founder { display: flex; gap: var(--space-4); align-items: flex-start; }
+.founder img { width: 72px; height: 72px; border-radius: 999px; object-fit: cover; flex-shrink: 0; }
+@media (max-width: 560px) { .founder { flex-direction: column; } }
 
 /* Utilities */
 .text-center { text-align: center; }

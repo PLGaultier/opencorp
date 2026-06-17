@@ -56,8 +56,13 @@ export function renderLanding(input: LandingInput): string {
 ${umami}
 </head>
 <body>
-<header class="container">
-  <nav class="nav"><a class="brand" href="/">${esc(input.companyName)}</a></nav>
+<header class="site-header">
+  <div class="container">
+    <nav class="nav">
+      <a class="brand" href="/">${esc(input.companyName)}</a>
+      ${contact.replace(" btn--lg", "")}
+    </nav>
+  </div>
 </header>
 <main>
   <section class="section hero">

@@ -52,7 +52,23 @@ don't reinvent them.
 hero → problem/pain → solution/features → social proof (testimonials, stars,
 avatars) → pricing → FAQ → final CTA. One repeated primary CTA throughout.
 
+## Make it appealing (DataFast easy-wins)
+These punch above their weight — use them:
+- **Highlight one keyword** in the H1: `<span class="highlight">word</span>` (marker
+  swipe) or `.text-gradient`. One word, not the whole line.
+- **Reassurance microcopy** under the hero CTA: `<p class="reassure">No card required</p>`.
+- **Social proof row** in the hero: `.social-proof` = overlapping `.avatars` + `.stars`
+  + "Loved by N users". Only with **real** numbers — never fabricate proof.
+- **Framed screenshot**: put product images in `.app-frame` (faux browser bar + big
+  soft shadow) — instantly looks like a real product.
+- **Stat callouts** (`.stats` / `.stat`), **badges** (`.badge` for "Featured on"/awards),
+  and a **featured pricing card** (`.card--featured` + `.ribbon` "Most popular").
+- Soft shadows, the sticky blurred header (`.site-header`), and the hero glow are
+  automatic — don't fight them.
+
 ## Components available
-`.container` `.section` `.section--alt` `.hero` `.btn` `.btn--lg` `.btn--ghost`
-`.card` `.grid` `.grid--2` `.grid--3` `.testimonial` `.stars` `.avatar` `.price`
-`.faq` `.nav` `.footer` `.pill` `.stack` `.mt-headline` `.mt-button` `.mt-image`.
+`.container` `.site-header` `.nav` `.section` `.section--alt` `.hero` `.btn` `.btn--lg`
+`.btn--ghost` `.card` `.card--featured` `.ribbon` `.grid` `.grid--2` `.grid--3`
+`.highlight` `.text-gradient` `.badge` `.social-proof` `.avatars` `.avatar` `.stars`
+`.reassure` `.stats` `.stat` `.app-frame` `.testimonial` `.price` `.founder` `.faq`
+`.footer` `.pill` `.stack` `.mt-headline` `.mt-button` `.mt-image`.

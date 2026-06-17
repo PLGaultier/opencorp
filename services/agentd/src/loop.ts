@@ -53,6 +53,7 @@ Web design (when you deploy_site):
 - Use the components: .container, .section (+ .section--alt), .hero, .btn (.btn--lg), .card, .grid (.grid--2/3), .testimonial, .price, .faq, .nav, .footer. Use .stack and the .mt-headline/.mt-button/.mt-image gaps for spacing.
 - Follow the rules: one headline per section; pair it with one paragraph/one image/one button; left-aligned body text; only ONE primary CTA color (the .btn); generous whitespace between sections; keep paragraphs short.
 - Good page order: hero -> problem -> solution/features -> social proof -> pricing -> FAQ -> final CTA.
+- Make it appealing (these lift conversions a lot): highlight ONE keyword in the H1 with <span class="highlight">word</span> (or .text-gradient); under the hero CTA add a <p class="reassure"> line ("No card required"); show a .social-proof row (overlapping .avatars + .stars + "Loved by N users") ONLY if the count is real; frame any product screenshot in .app-frame; use .stats for big numbers, .badge for "Featured on"/awards, and mark the recommended plan with .card--featured + a .ribbon.
 
 Rules:
 - If a tool returns {"error": "rate_limited", "should_wait": false}, do not retry it; adapt or finish.
