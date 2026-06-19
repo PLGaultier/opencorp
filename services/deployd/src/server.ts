@@ -57,13 +57,19 @@ const app = new Hono();
 
 app.get("/healthz", (c) => c.json({ ok: true, service: "deployd" }));
 
-// Caddy on-demand-TLS authorization (§12): only mint a cert for {slug}.{domain}
-// when that company actually has a published site, so the wildcard can't be used
-// to issue certs for arbitrary subdomains. Caddy calls this with ?domain=<host>.
+// Caddy on-demand-TLS authorization (§12): mint a cert for {host} when it is a
+// control-plane subdomain (api/gw/llm) or a {slug}.{domain} whose company has a
+// published site — so the wildcard can't be used to issue certs for arbitrary
+// subdomains. Caddy calls this with ?domain=<host>. Control-plane names are
+// on-demand too because an on-demand wildcard (*.{domain}) overlaps them and
+// suppresses proactive issuance, so they must be authorized here.
+const CONTROL_PLANE_LABELS = new Set(["api", "gw", "llm"]);
 app.get("/exists", (c) => {
   const host = c.req.query("domain") ?? "";
   const slug = host.split(".")[0] ?? "";
-  const ok = /^[a-z0-9-]{1,63}$/.test(slug) && existsSync(join(sitesDir(), slug));
+  const ok =
+    CONTROL_PLANE_LABELS.has(slug) ||
+    (/^[a-z0-9-]{1,63}$/.test(slug) && existsSync(join(sitesDir(), slug)));
   return ok ? c.text("ok", 200) : c.text("unknown site", 404);
 });
 

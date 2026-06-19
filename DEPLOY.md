@@ -35,8 +35,9 @@ The web app runs on **Vercel** (already wired). Everything else runs on the VPS.
 git clone <your repo> && cd OpenCorp
 cp .env.prod.example .env.prod
 # Edit .env.prod: replace every example.com with your domain, set strong
-# POSTGRES_PASSWORD / GATEWAY_SECRET / LITELLM_API_KEY (openssl rand -hex 32),
-# and paste ANTHROPIC_API_KEY + GitHub OAuth creds.
+# POSTGRES_PASSWORD / GATEWAY_SECRET / LITELLM_API_KEY / BETTER_AUTH_SECRET
+# (openssl rand -hex 32 each), and paste ANTHROPIC_API_KEY + GitHub OAuth creds.
+# BETTER_AUTH_SECRET is REQUIRED — the api refuses to boot in production without it.
 ```
 
 ## 2. Launch the backend
