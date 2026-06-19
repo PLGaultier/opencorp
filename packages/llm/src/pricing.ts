@@ -25,13 +25,25 @@ export const MODEL_PRICES: Record<string, TokenPrice> = {
 // than over-bills on a miss.
 const FALLBACK: TokenPrice = MODEL_PRICES["claude-haiku-4-5"]!;
 
+// LiteLLM echoes back the requested tier alias (e.g. "standard") as the response
+// `model`, not the resolved Anthropic id — so the §10 tier ladder must be mapped
+// to its backing model here, or every tier would bill at the FALLBACK (Haiku)
+// rate. Keep in sync with infra/compose/litellm.config.yaml.
+const TIER_MODEL: Record<string, string> = {
+  mini: "claude-haiku-4-5",
+  standard: "claude-sonnet-4-6",
+  frontier: "claude-opus-4-8",
+};
+
 /**
- * Best-match price for a model id. LiteLLM returns ids like
- * `claude-haiku-4-5-20251001` or `anthropic/claude-sonnet-4-6`, so we match by
- * substring against the known base ids.
+ * Best-match price for a model id. Handles both the tier alias LiteLLM returns
+ * ("mini"/"standard"/"frontier") and a real resolved id like
+ * `claude-haiku-4-5-20251001` or `anthropic/claude-sonnet-4-6` (substring match).
  */
 export function priceFor(model: string): TokenPrice {
   const m = model.toLowerCase();
+  const tierBacked = TIER_MODEL[m];
+  if (tierBacked) return MODEL_PRICES[tierBacked]!;
   for (const [id, price] of Object.entries(MODEL_PRICES)) {
     if (m.includes(id)) return price;
   }

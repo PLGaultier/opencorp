@@ -1,20 +1,26 @@
-# Tiered routing (§3, §5.4). Point these at any OpenAI-compatible endpoint.
+# Tiered routing (§3, §5.4, §10). The CEO "brains" level shifts every agent call
+# along this ladder, so the three tiers must be three real models of increasing
+# capability/cost — that's what makes Intern/Grad/PhD actually different:
+#   mini → Haiku 4.5 (Intern)   standard → Sonnet 4.6 (Grad)   frontier → Opus 4.8 (PhD)
+# Cost metering (packages/llm/pricing.ts) keys off the resolved model id, so the
+# wallet is debited the true per-tier cost automatically.
 model_list:
   - model_name: frontier
     litellm_params:
-      model: anthropic/claude-haiku-4-5-20251001
+      model: anthropic/claude-opus-4-8
       api_key: os.environ/ANTHROPIC_API_KEY
   - model_name: standard
     litellm_params:
-      model: anthropic/claude-haiku-4-5-20251001
+      model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
   - model_name: mini
     litellm_params:
-      model: anthropic/claude-haiku-4-5-20251001
+      model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
 litellm_settings:
   num_retries: 2
+  # Degrade gracefully under load/outage: Opus → Sonnet → Haiku.
   fallbacks:
     - frontier: ["standard"]
     - standard: ["mini"]

@@ -404,12 +404,9 @@ a.task:hover { border-color: var(--accent); }
 .level-card:hover:not(:disabled) { border-color: var(--accent); transform: translateY(-1px); }
 .level-card:disabled { opacity: 0.6; cursor: default; }
 .level-card.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.level-emoji { font-size: 1.25rem; line-height: 1.2; }
-.level-card.on .level-emoji { animation: brain-pop 0.3s ease; }
-.level-name { font-size: 0.78rem; font-weight: 500; }
-.level-mult { font-size: 0.68rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-.engine-tag { margin: 0.55rem 0 0; font-size: 0.8rem; }
-@keyframes brain-pop { 0% { transform: scale(0.7) rotate(-8deg); } 60% { transform: scale(1.2) rotate(4deg); } 100% { transform: scale(1) rotate(0); } }
+.level-name { font-size: 0.82rem; font-weight: 600; }
+.level-mult { font-size: 0.66rem; color: var(--muted); }
+.engine-tag { margin: 0.5rem 0 0; font-size: 0.8rem; }
 
 /* Reusable section panel + header */
 .panel { border-top: 1px solid var(--border); padding-top: 1.25rem; }

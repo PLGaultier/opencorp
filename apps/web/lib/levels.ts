@@ -7,7 +7,6 @@ import type { ModelLevel } from "./data";
  */
 export interface LevelMeta {
   id: ModelLevel;
-  emoji: string;
   name: string;
   tagline: string;
   model: string;
@@ -17,9 +16,9 @@ export interface LevelMeta {
 }
 
 export const LEVELS: LevelMeta[] = [
-  { id: "intern", emoji: "🐣", name: "Intern", tagline: "Eager and cheap — pinches every credit.", model: "Haiku-grade", costMult: 0.6, perTaskCents: 90 },
-  { id: "grad", emoji: "🎓", name: "Grad", tagline: "Balanced default — solid everyday reasoning.", model: "Sonnet-grade", costMult: 1, perTaskCents: 150 },
-  { id: "phd", emoji: "🧠", name: "PhD", tagline: "Galaxy brain — frontier model, burns credits.", model: "Opus-grade", costMult: 2, perTaskCents: 320 },
+  { id: "intern", name: "Intern", tagline: "Cheapest — fast, frugal reasoning.", model: "Haiku 4.5", costMult: 1, perTaskCents: 90 },
+  { id: "grad", name: "Grad", tagline: "Balanced default.", model: "Sonnet 4.6", costMult: 3, perTaskCents: 200 },
+  { id: "phd", name: "PhD", tagline: "Most capable — frontier model.", model: "Opus 4.8", costMult: 5, perTaskCents: 340 },
 ];
 
 export const levelMeta = (id: ModelLevel): LevelMeta => LEVELS.find((l) => l.id === id) ?? LEVELS[1]!;
