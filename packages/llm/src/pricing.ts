@@ -50,21 +50,35 @@ export function priceFor(model: string): TokenPrice {
   return FALLBACK;
 }
 
+// Anthropic server-side web_search: $10 per 1,000 searches = $0.01 = 1000
+// micro-cents per search, billed on top of the tokens for the results pulled
+// into context (§7.1). Each request counts once regardless of result count.
+export const SEARCH_REQUEST_MICRO_CENTS = 1000;
+
+/** Token (+ optional web_search) usage from one completion or tool call. */
+export interface Usage {
+  input: number;
+  output: number;
+  /** Anthropic web_search_requests, when a call used the web_search tool. */
+  searchRequests?: number;
+}
+
 /**
  * Cost of one completion in **micro-cents** (integer, 1 cent = 1000 micro-cents)
  * so per-call costs accumulate without float drift; convert to cents at task
  * reconcile time (`Math.round(totalMicro / 1000)`).
  */
-export function costMicroCents(model: string, usage: { input: number; output: number }): number {
+export function costMicroCents(model: string, usage: Usage): number {
   const p = priceFor(model);
   // USD/MTok → micro-cents/token is `usd_per_mtok / 10`
   // (×100 cents ×1000 micro ÷ 1_000_000 tokens).
   const inMicro = (usage.input * p.inputPerMTokUsd) / 10;
   const outMicro = (usage.output * p.outputPerMTokUsd) / 10;
-  return Math.round(inMicro + outMicro);
+  const searchMicro = (usage.searchRequests ?? 0) * SEARCH_REQUEST_MICRO_CENTS;
+  return Math.round(inMicro + outMicro + searchMicro);
 }
 
 /** Convenience: cost of one completion in cents (may be fractional — for display). */
-export function costCents(model: string, usage: { input: number; output: number }): number {
+export function costCents(model: string, usage: Usage): number {
   return costMicroCents(model, usage) / 1000;
 }

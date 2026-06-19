@@ -8,6 +8,7 @@ import { adsFor, withinMonthlyCap, monthStartDay } from "./providers/ads";
 import { monthlyAdSpendCents } from "./ads";
 import { emailFor, isValidAddress, listUnsubscribeHeader, syncInbox } from "./providers/email";
 import { getAnalytics } from "./providers/analytics";
+import { webSearch } from "./providers/research";
 import type { BrowserProvider } from "./providers/browser";
 
 /**
@@ -241,6 +242,31 @@ export const registry: Registry = {
   },
 
   web: {
+    search: {
+      // §7.1 — live web research via Anthropic web_search. Read-only, but it
+      // costs money ($10/1k searches + tokens), so it returns a `_meter` the
+      // worker folds into the task's real API cost (§10 pillar 1).
+      schema: z.object({
+        query: z.string().min(2).max(400),
+        maxResults: z.number().int().min(1).max(15).optional(),
+      }),
+      write: false,
+      async handler(ctx, args: { query: string; maxResults?: number }) {
+        const r = await webSearch(args.query, args.maxResults ?? 8);
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "web_search",
+          payload: { query: args.query, hits: r.results.length, searchRequests: r.usage.searchRequests },
+        });
+        return {
+          query: r.query,
+          results: r.results,
+          summary: r.summary,
+          _meter: { model: r.model, usage: r.usage },
+        };
+      },
+    },
     deploy_site: {
       schema: z.object({
         files: z.record(z.string().max(500_000)).refine((f) => Object.keys(f).length <= 50, {

@@ -39,7 +39,7 @@ Tools (call via {"server": "...", "tool": "...", "args": {...}}):
 - org: get_company_info, read_mission, list_tasks, create_task
 - docs: create_document, update_document, list_documents, read_document, search_documents
 - db: get_schema, run_sql, execute_sql
-- web: deploy_site (args: {files: {"index.html": "..."}}) , get_deploy_status
+- web: search (args: {query, maxResults?}) — live web search; returns {title, url} hits + a short summary. Use it to find leads, companies, prices, or current facts, then browser.navigate/extract the promising URLs. deploy_site (args: {files: {"index.html": "..."}}), get_deploy_status
 - code: exec (args: {command}), write_file (args: {path, content}), read_file (args: {path}), list_files (args: {dir?}), git_commit_push (args: {message}) — runs in your own Linux sandbox workspace; build and run real software here
 - payments: create_product (args: {name, priceCents, currency}), get_payment_link (args: {productId}), list_products, get_revenue
 - email: send_email (args: {to:[...], subject, body}), reply_email, list_emails, read_email
@@ -107,6 +107,13 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
       }
       input.onStep?.({ n, thought, tool: `${action.server}.${action.tool}` });
       const result = await dispatchTool(input, code, action.server, action.tool, action.args);
+      // §10 — a server-side-metered tool (e.g. web.search) returns its own usage;
+      // fold it into the task's real API cost, then hide it from the model.
+      if (result && typeof result === "object" && "_meter" in result) {
+        const m = (result as { _meter?: { model: string; usage: { input: number; output: number; searchRequests?: number } } })._meter;
+        if (m) costMicro += costMicroCents(m.model, m.usage);
+        delete (result as { _meter?: unknown })._meter;
+      }
       transcript.push(
         `Step ${n}: called ${action.server}.${action.tool}\nResult: ${JSON.stringify(result).slice(0, 4000)}`,
       );
