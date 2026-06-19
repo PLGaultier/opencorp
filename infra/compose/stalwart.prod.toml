@@ -1,0 +1,50 @@
+# Stalwart prod config (§3 email, §12). OpenCorp sends OUTBOUND through Resend
+# (the composite transport), so Stalwart never relays mail — it only RECEIVES at
+# {slug}@mail.opencorp.app and serves JMAP so company agents can read replies.
+# That's why there's an SMTP listener (inbound :25) + an HTTP listener (JMAP +
+# admin API), but no submission/relay listener.
+#
+# Deliverability of outbound is Resend's job (warm IPs, DKIM/SPF on the verified
+# domain). Inbound here needs only an MX record → this host. The admin + per-
+# mailbox passwords are derived from secrets in .env.prod, never the repo.
+
+[server.listener.smtp]
+bind = ["[::]:25"]
+protocol = "smtp"
+
+# JMAP + management API — how the app reads mail and provisions mailboxes.
+[server.listener.http]
+bind = ["[::]:8080"]
+protocol = "http"
+
+[server.hostname]
+# Greeting/HELO name; matches the MX/A host so receivers see a consistent name.
+name = "mail.opencorp.app"
+
+[storage]
+data = "rocksdb"
+fts = "rocksdb"
+blob = "rocksdb"
+lookup = "rocksdb"
+directory = "internal"
+
+[store."rocksdb"]
+type = "rocksdb"
+path = "/opt/stalwart/data"
+compression = "lz4"
+
+[directory."internal"]
+type = "internal"
+store = "rocksdb"
+
+[tracer."stdout"]
+type = "stdout"
+level = "info"
+ansi = false
+enable = true
+
+# Admin used by the provisioning activity (StalwartAdmin → /api/principal).
+# Secret comes from the environment (.env.prod: STALWART_ADMIN_SECRET).
+[authentication.fallback-admin]
+user = "admin"
+secret = "%{env:STALWART_ADMIN_SECRET}%"

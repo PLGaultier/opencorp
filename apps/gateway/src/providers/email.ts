@@ -29,13 +29,16 @@ export interface OutboundEmail {
 }
 
 export interface EmailProvider {
-  readonly kind: "stalwart" | "resend" | "local";
+  readonly kind: "stalwart" | "resend" | "local" | "composite";
+  /** True when this provider can pull inbound mail (so agents can read replies). */
+  readonly canReceive: boolean;
   send(msg: OutboundEmail): Promise<{ messageId: string }>;
   fetchInbox(limit?: number): Promise<InboundMessage[]>;
 }
 
 class LocalEmail implements EmailProvider {
   readonly kind = "local";
+  readonly canReceive = false;
   async send(): Promise<{ messageId: string }> {
     // No real transport in dev — the emails table is the mirror; nothing leaves.
     return { messageId: `local:${randomUUID()}` };
@@ -47,6 +50,7 @@ class LocalEmail implements EmailProvider {
 
 class StalwartEmail implements EmailProvider {
   readonly kind = "stalwart";
+  readonly canReceive = true;
   private client: StalwartJmapClient;
 
   constructor(url: string, account: string, password: string) {
@@ -75,6 +79,7 @@ class StalwartEmail implements EmailProvider {
  */
 class ResendEmail implements EmailProvider {
   readonly kind = "resend";
+  readonly canReceive = false; // send-only; inbound comes from Stalwart
   constructor(
     private apiKey: string,
     private sender?: string, // undefined = use msg.from (verified domain required)
@@ -114,28 +119,61 @@ class ResendEmail implements EmailProvider {
 }
 
 /**
- * Resolve the company's transport. Priority: Resend relay (real external
- * delivery) → Stalwart JMAP (self-hosted) → local mirror (nothing leaves). The
- * mailbox password is derived from the platform master secret (never stored,
- * see @opencorp/stalwart derive.ts); per-company SecretStore entries can
- * override platform URL/master/keys for BYO-mail setups.
+ * Split transport (§12): outbound via one provider, inbound via another — so a
+ * company can send through Resend's warm IPs (deliverable) while replies land in
+ * a real Stalwart inbox its agents can read. Send→outbound, fetchInbox→inbound.
+ */
+class CompositeEmail implements EmailProvider {
+  readonly kind = "composite";
+  constructor(
+    private outbound: EmailProvider,
+    private inbound: EmailProvider,
+  ) {}
+  get canReceive() {
+    return this.inbound.canReceive;
+  }
+  send(msg: OutboundEmail): Promise<{ messageId: string }> {
+    return this.outbound.send(msg);
+  }
+  fetchInbox(limit?: number): Promise<InboundMessage[]> {
+    return this.inbound.fetchInbox(limit);
+  }
+}
+
+/**
+ * Resolve the company's transport. Outbound priority: Resend relay (deliverable)
+ * → Stalwart → local mirror. Inbound: Stalwart only (the one transport that can
+ * pull replies). When the two differ — the autonomous-prospecting setup, Resend
+ * out + Stalwart in — they're combined into a CompositeEmail. The mailbox
+ * password is derived from the platform master secret (never stored, see
+ * @opencorp/stalwart derive.ts); per-company SecretStore entries can override
+ * platform URL/master/keys for BYO-mail setups.
  */
 export async function emailFor(
   companyId: string,
   secrets: SecretStore,
   accountEmail: string,
 ): Promise<EmailProvider> {
-  const resendKey = (await secrets.get(companyId, "RESEND_API_KEY")) ?? process.env.RESEND_API_KEY;
-  if (resendKey) {
-    const sender =
-      (await secrets.get(companyId, "RESEND_FROM")) ?? process.env.RESEND_FROM;
-    return new ResendEmail(resendKey, sender); // sender undefined → sends from msg.from directly
-  }
   const env = stalwartEnv();
   const url = (await secrets.get(companyId, "STALWART_URL")) ?? env?.url;
   const master = (await secrets.get(companyId, "STALWART_MASTER_SECRET")) ?? env?.masterSecret;
-  if (!url || !master || !accountEmail) return new LocalEmail();
-  return new StalwartEmail(url, accountEmail, deriveMailboxPassword(master, accountEmail));
+  const stalwart =
+    url && master && accountEmail
+      ? new StalwartEmail(url, accountEmail, deriveMailboxPassword(master, accountEmail))
+      : null;
+
+  const local = new LocalEmail();
+  const resendKey = (await secrets.get(companyId, "RESEND_API_KEY")) ?? process.env.RESEND_API_KEY;
+  let outbound: EmailProvider;
+  if (resendKey) {
+    const sender = (await secrets.get(companyId, "RESEND_FROM")) ?? process.env.RESEND_FROM;
+    outbound = new ResendEmail(resendKey, sender); // sender undefined → sends from msg.from directly
+  } else {
+    outbound = stalwart ?? local;
+  }
+  const inbound: EmailProvider = stalwart ?? local;
+
+  return outbound === inbound ? outbound : new CompositeEmail(outbound, inbound);
 }
 
 /**
@@ -153,7 +191,7 @@ export async function syncInbox(
     SELECT email_address FROM companies WHERE id = ${companyId}`;
   if (!c?.email_address) return { synced: 0, transport: "local" };
   const provider = await emailFor(companyId, secrets, c.email_address);
-  if (provider.kind !== "stalwart") return { synced: 0, transport: provider.kind };
+  if (!provider.canReceive) return { synced: 0, transport: provider.kind };
   const { synced } = await mirrorInbox(
     sql,
     ledger,

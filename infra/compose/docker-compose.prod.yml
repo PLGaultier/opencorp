@@ -51,6 +51,23 @@ services:
     volumes: ["./litellm.config.yaml:/etc/litellm/config.yaml:ro"]
     restart: unless-stopped
 
+  # Real email (§3, §12): receives mail at {slug}@mail.opencorp.app and serves
+  # JMAP so agents can read replies. Outbound goes through Resend, not here.
+  # Inbound needs port 25 reachable from the internet (MX → this host).
+  stalwart:
+    image: stalwartlabs/stalwart:v0.13.4
+    environment:
+      STALWART_ADMIN_SECRET: ${STALWART_ADMIN_SECRET:?set STALWART_ADMIN_SECRET}
+    volumes:
+      - stalwartdata:/opt/stalwart
+      - ./stalwart.prod.toml:/opt/stalwart/etc/config.toml:ro
+    ports: ["25:25"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz/live || exit 1"]
+      interval: 10s
+      retries: 12
+
   # One-shot DB migration; app services wait for it to complete.
   migrate:
     <<: *app-build
@@ -103,5 +120,6 @@ services:
 volumes:
   pgdata:
   sites:
+  stalwartdata:
   caddy_data:
   caddy_config:
