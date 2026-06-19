@@ -59,9 +59,17 @@ export const auth = betterAuth({
           // §10 pillar 1: the wallet is real money (cents). New owners get a
           // €5 trial allowance, burned at real API cost. Reason must be a valid
           // credit_reason enum value ('grant'); meta marks it as onboarding.
-          await authSql`
-            INSERT INTO credit_entries (conglomerate_id, delta, reason, meta)
-            VALUES (${cong!.id}, 500, 'grant', ${authSql.json({ kind: "onboarding" })})`;
+          // Best-effort: a failed bonus must never break signup — a throw here
+          // bubbles up as Better Auth "unable_to_create_user" and 404s the OAuth
+          // callback. meta is cast from a JSON string to avoid postgres.js json()
+          // serialization quirks.
+          try {
+            await authSql`
+              INSERT INTO credit_entries (conglomerate_id, delta, reason, meta)
+              VALUES (${cong!.id}, 500, 'grant', ${JSON.stringify({ kind: "onboarding" })}::jsonb)`;
+          } catch (err) {
+            console.error("onboarding credit grant failed (non-fatal)", err);
+          }
         },
       },
     },
