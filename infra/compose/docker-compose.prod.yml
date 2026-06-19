@@ -63,10 +63,9 @@ services:
       - ./stalwart.prod.toml:/opt/stalwart/etc/config.toml:ro
     ports: ["25:25"]
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/healthz/live || exit 1"]
-      interval: 10s
-      retries: 12
+    # No healthcheck: the Stalwart image ships neither curl nor wget, so any
+    # HTTP-based check is always "unhealthy" despite the server being up. Nothing
+    # depends on its health condition, so a plain "Up" is the honest signal.
 
   # One-shot DB migration; app services wait for it to complete.
   migrate:
