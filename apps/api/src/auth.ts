@@ -6,9 +6,9 @@ import * as schema from "@opencorp/schema";
 import type { MiddlewareHandler } from "hono";
 
 /**
- * Auth (§3: Better Auth, orgs = conglomerates). Email + password sessions;
- * signing up creates the user's conglomerate with an owner membership, so
- * every authenticated user can immediately create companies.
+ * Auth (§3: Better Auth, orgs = conglomerates). GitHub OAuth only — the first
+ * sign-in creates the user's conglomerate with an owner membership, so every
+ * authenticated user can immediately create companies.
  *
  * Public transparency surfaces (/api/ledger, /api/live, /api/companies, /c/*)
  * stay unauthenticated by design (§9.2) — auth protects owner actions and
@@ -38,8 +38,8 @@ export const GITHUB_ENABLED = Boolean(GITHUB_ID && GITHUB_SECRET);
 export const auth = betterAuth({
   baseURL: process.env.API_URL ?? "http://localhost:3001",
   database: drizzleAdapter(db, { provider: "pg", schema }),
-  // Email+password kept as a fallback, but the UI leads with GitHub.
-  emailAndPassword: { enabled: true },
+  // GitHub-only for now (simplicity): no email+password.
+  emailAndPassword: { enabled: false },
   socialProviders: GITHUB_ENABLED
     ? { github: { clientId: GITHUB_ID!, clientSecret: GITHUB_SECRET! } }
     : {},
@@ -56,6 +56,12 @@ export const auth = betterAuth({
           await authSql`
             INSERT INTO memberships (user_id, conglomerate_id, role)
             VALUES (${user.id}, ${cong!.id}, 'owner')`;
+          // §10 pillar 1: the wallet is real money (cents). New owners get a
+          // €5 trial allowance, burned at real API cost. Reason must be a valid
+          // credit_reason enum value ('grant'); meta marks it as onboarding.
+          await authSql`
+            INSERT INTO credit_entries (conglomerate_id, delta, reason, meta)
+            VALUES (${cong!.id}, 500, 'grant', ${authSql.json({ kind: "onboarding" })})`;
         },
       },
     },

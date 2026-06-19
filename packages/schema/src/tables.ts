@@ -28,6 +28,10 @@ export const autonomyLevel = pgEnum("autonomy_level", ["supervised", "bounded", 
 // "department" = persistent sub-planners (CMO/CTO/CFO, §14 M5); name carries the role
 export const agentKind = pgEnum("agent_kind", ["ceo", "worker", "department"]);
 export const modelTier = pgEnum("model_tier", ["frontier", "standard", "mini"]);
+// The CEO's "brains" (§10): which model bundle powers this company's agents. A
+// playful ladder — intern (cheapest, Haiku-biased) → grad (default, Sonnet) →
+// phd (priciest, Opus-biased). Higher levels spend more per task.
+export const modelLevel = pgEnum("model_level", ["intern", "grad", "phd"]);
 // Ad campaign lifecycle (§14). Created `paused` (no spend), `active` once
 // launched, `paused` again on owner pause or auto-pause at the budget cap.
 export const adCampaignStatus = pgEnum("ad_campaign_status", ["paused", "active", "archived"]);
@@ -157,6 +161,8 @@ export const companies = pgTable("companies", {
   umamiSiteId: text("umami_site_id"),
   realBalanceCents: bigint("real_balance_cents", { mode: "number" }).notNull().default(0),
   autonomyLevel: autonomyLevel("autonomy_level").notNull().default("supervised"),
+  // §10: the model bundle powering this company's agents (see modelLevel enum).
+  modelLevel: modelLevel("model_level").notNull().default("grad"),
   // Ads (§14): owner-set ceiling on ad spend per calendar month. 0 = ads off.
   // Under `bounded` autonomy the agent may launch/budget campaigns up to this
   // cap without approval; beyond it the action parks for the owner (§7.3).

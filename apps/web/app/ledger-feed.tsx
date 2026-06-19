@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { API_URL, type LedgerEvent } from "@/lib/data";
+import { API_URL, toLedgerEvent, type LedgerEvent, type RawLedgerEvent } from "@/lib/data";
 
 function timeAgo(iso: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -41,20 +41,11 @@ export function LedgerFeed({
     es.addEventListener("open", () => setConnected(true));
     es.addEventListener("ledger", (ev) => {
       try {
-        const d = JSON.parse((ev as MessageEvent).data) as { seq: number; eventType: string; companyId: string | null };
+        const d = JSON.parse((ev as MessageEvent).data) as RawLedgerEvent;
         if (companySlug && d.companyId !== companySlug) return;
         setEvents((prev) => {
           if (prev.some((e) => e.seq === d.seq)) return prev;
-          const next: LedgerEvent = {
-            seq: d.seq,
-            companySlug: d.companyId,
-            actor: "",
-            eventType: d.eventType,
-            summary: "new event — verify on /api/ledger",
-            hash: "live",
-            createdAt: new Date().toISOString(),
-          };
-          return [next, ...prev].slice(0, 60);
+          return [toLedgerEvent(d), ...prev].slice(0, 60);
         });
       } catch {
         /* ignore malformed frames */

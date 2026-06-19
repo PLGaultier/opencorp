@@ -60,7 +60,8 @@ export async function syncCompanyAdSpend(
   const provider = await adsFor(co.conglomerate_id, secrets, cg?.meta_ad_account_id ?? null);
 
   const active = await sql<CampaignRow[]>`
-    SELECT id, provider_ref, budget_cents, budget_type, launched_at
+    SELECT id, provider_ref, budget_cents, budget_type,
+      to_char(launched_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS launched_at
     FROM ad_campaigns WHERE company_id = ${companyId} AND status = 'active'`;
 
   const before = await monthlyAdSpendCents(sql, companyId);

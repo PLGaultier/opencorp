@@ -13,18 +13,22 @@ const act = proxyActivities<typeof activities>({
 });
 
 // the agent loop gets the full §5.3 wall-clock budget and no retries:
-// a second attempt would double-charge side effects (emails, deploys)
+// a second attempt would double-charge side effects (emails, deploys).
+// heartbeatTimeout is a backstop — runWorker also sends a keepalive every
+// 60 s so multi-minute LLM calls don't accidentally trip the timeout.
 const agent = proxyActivities<Pick<typeof activities, "runWorker">>({
   startToCloseTimeout: "31 minutes",
-  heartbeatTimeout: "2 minutes",
+  heartbeatTimeout: "12 minutes",
   retry: { maximumAttempts: 1 },
 });
 
 export async function TaskRun(input: { taskId: string }): Promise<{ summary: string }> {
-  await act.chargeTask(input.taskId, 1);
+  await act.chargeTask(input.taskId); // hold the estimated cost (§10 pillar 1)
   await act.setTaskState(input.taskId, "running");
   try {
-    const { summary } = await agent.runWorker(input.taskId);
+    const { summary, costMicroCents } = await agent.runWorker(input.taskId);
+    // Reconcile the hold to the real metered API cost before marking done.
+    await act.reconcileTask(input.taskId, costMicroCents ?? 0);
     await act.setTaskState(input.taskId, "done", { resultSummary: summary });
     return { summary };
   } catch (err) {

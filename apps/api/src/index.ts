@@ -82,14 +82,15 @@ const requireCompanyAccess: typeof requireAuth = async (c, next) => {
   await next();
 };
 
-// §9.2/§9.4 — public company list with a real P&L: revenue in, credits spent,
-// money withdrawn, current balance. Public companies only (is_public, §4).
+// §9.2/§9.4 — public company list with a real P&L: revenue in, real money spent
+// (wallet debits at true API cost, §10 pillar 1), money withdrawn, current
+// balance. Public companies only (is_public, §4).
 const PNL_COLUMNS = sql`
   c.id, c.slug, c.name, c.mission, c.status, c.real_balance_cents,
-  c.daily_task_cap, c.autonomy_level, c.is_public, c.ad_monthly_budget_cap_cents,
+  c.daily_task_cap, c.autonomy_level, c.model_level, c.is_public, c.ad_monthly_budget_cap_cents,
   COALESCE((SELECT SUM(amount_cents) FROM payments p WHERE p.company_id = c.id), 0) AS revenue_cents,
   COALESCE((SELECT -SUM(delta) FROM credit_entries ce
-            WHERE ce.company_id = c.id AND ce.reason IN ('task_charge','task_refund')), 0) AS credits_spent,
+            WHERE ce.company_id = c.id AND ce.reason IN ('task_charge','task_refund')), 0) AS spend_cents,
   COALESCE((SELECT SUM((payload->>'amountCents')::bigint) FROM ledger_events le
             WHERE le.company_id = c.id AND le.event_type = 'money_out'), 0) AS money_out_cents,
   COALESCE((SELECT count(*) FROM tasks t WHERE t.company_id = c.id AND t.status = 'done'), 0) AS tasks_done,
@@ -97,21 +98,22 @@ const PNL_COLUMNS = sql`
 
 interface PnlRow {
   id: string; slug: string; name: string; mission: string; status: string;
-  real_balance_cents: string; revenue_cents: string; credits_spent: string;
+  real_balance_cents: string; revenue_cents: string; spend_cents: string;
   money_out_cents: string; tasks_done: string; tasks_queued: string;
-  daily_task_cap: string; autonomy_level: string; is_public: boolean;
+  daily_task_cap: string; autonomy_level: string; model_level: string; is_public: boolean;
   ad_monthly_budget_cap_cents: string;
 }
 const toPnl = (r: PnlRow) => ({
   id: r.id, slug: r.slug, name: r.name, mission: r.mission, status: r.status,
   revenueCents: Number(r.revenue_cents),
-  creditsSpent: Number(r.credits_spent),
+  spendCents: Number(r.spend_cents),
   moneyOutCents: Number(r.money_out_cents),
   balanceCents: Number(r.real_balance_cents),
   tasksDone: Number(r.tasks_done),
   tasksQueued: Number(r.tasks_queued),
   dailyTaskCap: Number(r.daily_task_cap),
   autonomyLevel: r.autonomy_level,
+  modelLevel: r.model_level,
   isPublic: r.is_public,
   adMonthlyBudgetCapCents: Number(r.ad_monthly_budget_cap_cents),
 });
@@ -119,6 +121,19 @@ const toPnl = (r: PnlRow) => ({
 app.get("/api/companies", async (c) => {
   const rows = await sql<PnlRow[]>`
     SELECT ${PNL_COLUMNS} FROM companies c WHERE c.is_public = true
+    ORDER BY c.created_at DESC LIMIT 100`;
+  return c.json({ companies: rows.map(toPnl) });
+});
+
+// The signed-in owner's own companies (public or private), across every
+// conglomerate they belong to — drives the personal dashboard. Registered
+// before /api/companies/:slug so the static "mine" path wins.
+app.get("/api/companies/mine", requireAuth, async (c) => {
+  const congIds = await userConglomerateIds(sql, c.get("userId"));
+  if (congIds.length === 0) return c.json({ companies: [] });
+  const rows = await sql<PnlRow[]>`
+    SELECT ${PNL_COLUMNS} FROM companies c
+    WHERE c.conglomerate_id = ANY(${congIds})
     ORDER BY c.created_at DESC LIMIT 100`;
   return c.json({ companies: rows.map(toPnl) });
 });
@@ -274,6 +289,8 @@ app.patch("/companies/:id", requireAuth, requireCompanyAccess, async (c) => {
       mission: z.string().min(10).max(2000).optional(),
       dailyTaskCap: z.number().int().min(1).max(50).optional(),
       autonomyLevel: z.enum(["supervised", "bounded", "full"]).optional(),
+      // §10 — the CEO "brains" level (which model bundle powers the agents).
+      modelLevel: z.enum(["intern", "grad", "phd"]).optional(),
       isPublic: z.boolean().optional(),
       // §14 — owner's monthly ad-spend ceiling (cents). 0 disables ads.
       adMonthlyBudgetCapCents: z.number().int().min(0).max(1_000_000_00).optional(),
@@ -284,22 +301,23 @@ app.patch("/companies/:id", requireAuth, requireCompanyAccess, async (c) => {
   const companyId = c.req.param("id");
   const p = body.data;
   const [row] = await sql<
-    { id: string; name: string; mission: string; daily_task_cap: number; autonomy_level: string; is_public: boolean; ad_monthly_budget_cap_cents: string }[]
+    { id: string; name: string; mission: string; daily_task_cap: number; autonomy_level: string; model_level: string; is_public: boolean; ad_monthly_budget_cap_cents: string }[]
   >`
     UPDATE companies SET
       name = COALESCE(${p.name ?? null}, name),
       mission = COALESCE(${p.mission ?? null}, mission),
       daily_task_cap = COALESCE(${p.dailyTaskCap ?? null}, daily_task_cap),
       autonomy_level = COALESCE(${p.autonomyLevel ?? null}, autonomy_level),
+      model_level = COALESCE(${p.modelLevel ?? null}, model_level),
       is_public = COALESCE(${p.isPublic ?? null}, is_public),
       ad_monthly_budget_cap_cents = COALESCE(${p.adMonthlyBudgetCapCents ?? null}, ad_monthly_budget_cap_cents)
     WHERE id = ${companyId}
-    RETURNING id, name, mission, daily_task_cap, autonomy_level, is_public, ad_monthly_budget_cap_cents`;
+    RETURNING id, name, mission, daily_task_cap, autonomy_level, model_level, is_public, ad_monthly_budget_cap_cents`;
   if (!row) return c.json({ error: "not_found" }, 404);
   await ledger.append({ companyId, actor: "user", eventType: "company_settings", payload: p });
   return c.json({
     id: row.id, name: row.name, mission: row.mission,
-    dailyTaskCap: row.daily_task_cap, autonomyLevel: row.autonomy_level, isPublic: row.is_public,
+    dailyTaskCap: row.daily_task_cap, autonomyLevel: row.autonomy_level, modelLevel: row.model_level, isPublic: row.is_public,
     adMonthlyBudgetCapCents: Number(row.ad_monthly_budget_cap_cents),
   });
 });
@@ -743,9 +761,20 @@ app.get("/api/conglomerates/:id/credits", requireAuth, async (c) => {
   // status comes back when the owner runs onboarding.
   const [cg] = await sql<{ stripe_connect_account_id: string | null }[]>`
     SELECT stripe_connect_account_id FROM conglomerates WHERE id = ${conglomerateId}`;
+  // §10 pillar 1 — runway: net real spend over the last 7 days → cents/day → days left.
+  const [burn] = await sql<{ total: string }[]>`
+    SELECT COALESCE(-SUM(delta), 0) AS total FROM credit_entries
+    WHERE conglomerate_id = ${conglomerateId}
+      AND reason IN ('task_charge', 'task_refund')
+      AND created_at > now() - interval '7 days'`;
+  const balanceCents = Number(balance?.balance ?? 0);
+  const burnCentsPerDay = Math.max(0, Number(burn?.total ?? 0)) / 7;
+  const runwayDays = burnCentsPerDay > 0 ? balanceCents / burnCentsPerDay : null;
   return c.json({
     conglomerateId,
-    balance: Number(balance?.balance ?? 0),
+    balance: balanceCents,
+    burnCentsPerDay,
+    runwayDays,
     breakdown: Object.fromEntries(breakdown.map((r) => [r.reason, Number(r.total)])),
     connectAccountId: cg?.stripe_connect_account_id ?? null,
     subscription: sub
@@ -791,24 +820,70 @@ const billingProvider = billingProviderFromEnv();
 const appendGrant = (payload: Record<string, unknown>) =>
   ledger.append({ companyId: null, actor: "system", eventType: "credit_change", payload });
 
+const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+
 app.get("/api/plans", (c) =>
   c.json({ plans: Object.values(PLANS), provider: billingProvider.kind }),
 );
 
 app.post("/conglomerates/:id/subscribe", requireAuth, async (c) => {
   const body = z
-    .object({ plan: z.enum(["free", "builder", "pro"]) })
+    .object({ plan: z.enum(["free", "builder", "pro"]), returnUrl: z.string().url().optional() })
     .safeParse(await c.req.json());
   if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
-  if (!(await userIsMemberOfConglomerate(sql, c.get("userId"), c.req.param("id")))) {
+  const conglomerateId = c.req.param("id");
+  if (!(await userIsMemberOfConglomerate(sql, c.get("userId"), conglomerateId))) {
     return c.json({ error: "forbidden" }, 403);
   }
+  const plan = PLANS[body.data.plan];
+  const returnUrl = body.data.returnUrl ?? `${WEB_ORIGIN}/credits`;
   try {
-    const sub = await subscribe(billingStore, billingProvider, appendGrant, c.req.param("id"), body.data.plan);
+    // Paid plan + platform Stripe key → redirect to Checkout; the grant lands on
+    // the webhook. Free plan, or local mode → grant the allowance immediately.
+    if (plan.priceCents > 0) {
+      const { body: out } = await gatewaySignedPost("/admin/billing/checkout", {
+        kind: "subscription",
+        conglomerateId,
+        amountCents: plan.priceCents,
+        allowanceCents: plan.credits,
+        plan: plan.id,
+        label: `${plan.name} plan`,
+        successUrl: returnUrl,
+        cancelUrl: returnUrl,
+      });
+      if (out.mode === "stripe" && typeof out.url === "string" && out.url) {
+        return c.json({ checkoutUrl: out.url });
+      }
+    }
+    const sub = await subscribe(billingStore, billingProvider, appendGrant, conglomerateId, body.data.plan);
     return c.json({ subscription: sub });
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 422);
   }
+});
+
+// §10 pillar 1, Stage 2 — one-off wallet top-up. Returns a checkout URL (Stripe
+// Checkout when configured, else a local checkout page); the wallet is credited
+// on completion (webhook / local POST).
+app.post("/api/conglomerates/:id/topup", requireAuth, async (c) => {
+  const body = z
+    .object({ amountCents: z.number().int().positive().max(100000), returnUrl: z.string().url().optional() })
+    .safeParse(await c.req.json());
+  if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
+  const conglomerateId = c.req.param("id");
+  if (!(await userIsMemberOfConglomerate(sql, c.get("userId"), conglomerateId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  const returnUrl = body.data.returnUrl ?? `${WEB_ORIGIN}/credits`;
+  const { body: out } = await gatewaySignedPost("/admin/billing/checkout", {
+    kind: "topup",
+    conglomerateId,
+    amountCents: body.data.amountCents,
+    label: "Wallet top-up",
+    successUrl: returnUrl,
+    cancelUrl: returnUrl,
+  });
+  return c.json({ mode: out.mode ?? "local", url: out.url ?? "" });
 });
 
 // Cron-invoked (idempotent): grant the new cycle's credits to recurring plans.
@@ -817,32 +892,39 @@ app.post("/billing/grant-cycle", async (c) =>
 );
 
 // §9.2 — live firehose via PG LISTEN/NOTIFY → SSE (no extra broker, §11.5).
-// `?company=<id>` filters server-side and enriches each frame with the full
-// (redacted) event row, so the dashboard terminal can render real lines.
+// Every frame is enriched with the full (redacted) event row — actor, payload
+// and hash — so the public /live firehose renders real lines, not placeholders,
+// identically to the snapshot. `?company=<id>` filters that stream server-side.
 const listenSql = postgres(databaseUrl, { max: 1 });
 app.get("/api/live", (c) => {
   const companyFilter = c.req.query("company") || null;
   return streamSSE(c, async (stream) => {
     const { unlisten } = await listenSql.listen("ledger_events", (payload) => {
       void (async () => {
-        if (!companyFilter) {
-          await stream.writeSSE({ event: "ledger", data: payload });
-          return;
-        }
         const thin = JSON.parse(payload) as { seq: number; companyId: string | null };
-        if (thin.companyId !== companyFilter) return;
+        if (companyFilter && thin.companyId !== companyFilter) return;
         const [row] = await sql<
-          { seq: string; actor: string; event_type: string; payload: unknown; created_at: string }[]
-        >`SELECT seq, actor, event_type, payload, created_at FROM ledger_events WHERE seq = ${thin.seq}`;
+          {
+            seq: string;
+            company_id: string | null;
+            actor: string;
+            event_type: string;
+            payload: unknown;
+            hash: Uint8Array;
+            created_at: string;
+          }[]
+        >`SELECT seq, company_id, actor, event_type, payload, hash, created_at
+            FROM ledger_events WHERE seq = ${thin.seq}`;
         if (!row) return;
         await stream.writeSSE({
           event: "ledger",
           data: JSON.stringify({
             seq: Number(row.seq),
-            companyId: companyFilter,
+            companyId: row.company_id,
             actor: row.actor,
             eventType: row.event_type,
             payload: row.payload,
+            hash: Buffer.from(row.hash).toString("hex"),
             createdAt: row.created_at,
           }),
         });

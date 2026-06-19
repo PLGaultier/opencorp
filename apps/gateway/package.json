@@ -23,5 +23,8 @@
     "@opencorp/llm": "workspace:*",
     "@opencorp/sandboxd": "workspace:*",
     "@opencorp/workflows": "workspace:*"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.49.0"
   }
 }

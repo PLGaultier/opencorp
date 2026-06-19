@@ -7,12 +7,13 @@ import { verifyToken } from "@opencorp/mcp-client";
 import { registry, type ToolContext } from "./tools";
 import { MemoryRateLimiter } from "./ratelimit";
 import { secretStoreFromEnv, infisicalEnv, InfisicalClient, InfisicalAdmin } from "./secrets";
-import { FetchBrowser } from "./providers/browser";
+import { makeBrowser } from "./providers/browser";
 import { recordPayment } from "./revenue";
 import { processWithdrawal } from "./payout";
 import { ensureConnectOnboarding } from "./connect";
 import { syncCompanyAdSpend, optimizeCompanyAds } from "./ads";
 import { verifyStripeSignature, parseCheckoutCompleted, fetchStripeFeeCents } from "./providers/stripe-webhook";
+import { creditWallet, activateSubscription, createBillingCheckout, localRef } from "./billing-checkout";
 import { requestApproval, resolveApproval, notifyOwnerOfApproval } from "./approvals";
 
 /**
@@ -38,7 +39,7 @@ export function createGateway(opts?: {
   const ledger = new Ledger(new PgStore(databaseUrl, poolMax));
   const limiter = new MemoryRateLimiter();
   const secrets = secretStoreFromEnv();
-  const browser = new FetchBrowser();
+  const browser = makeBrowser();
   // The gateway serves the local checkout page itself (it owns the DB + ledger
   // + recordPayment), so the default base is the gateway's own /checkout, not
   // deployd's. Stripe-mode links come from Stripe and ignore this entirely.
@@ -301,6 +302,69 @@ export function createGateway(opts?: {
     );
   });
 
+  // ── Wallet top-up (§10 pillar 1, Stage 2) ─────────────────────────────────
+  // Local checkout for adding real money to the conglomerate wallet. With a
+  // platform Stripe key this is bypassed (Stripe Checkout + webhook); offline it
+  // mirrors the product checkout above.
+  app.get("/checkout/topup/:conglomerateId/:amountCents", async (c) => {
+    const amount = money(Number(c.req.param("amountCents")), "eur");
+    return c.html(
+      checkoutPage({
+        title: "Top up",
+        company: "OpenCorp",
+        body: `<h1>Top up your wallet</h1><p class="co">Funds tasks at real API cost</p>
+          <p class="price">${amount}</p>
+          <form method="post"><button type="submit">Add ${amount}</button></form>
+          <p class="note">Local checkout — no real card is charged.</p>`,
+      }),
+    );
+  });
+
+  app.post("/checkout/topup/:conglomerateId/:amountCents", async (c) => {
+    const conglomerateId = c.req.param("conglomerateId");
+    const amountCents = Number(c.req.param("amountCents"));
+    if (!Number.isInteger(amountCents) || amountCents <= 0) {
+      return c.html(checkoutPage({ title: "Invalid", company: "OpenCorp", body: `<h1>Invalid amount</h1>` }), 400);
+    }
+    const { credited } = await creditWallet(sql, ledger, {
+      conglomerateId,
+      amountCents,
+      ref: localRef("topup"),
+      kind: "topup",
+    });
+    const amount = money(amountCents, "eur");
+    return c.html(
+      checkoutPage({
+        title: "Wallet topped up",
+        company: "OpenCorp",
+        body: `<div class="ok">✓</div><h1>Wallet topped up</h1>
+          <p class="price">${amount}</p>
+          <p class="note">${credited ? "Added to your wallet on the ledger." : "Already recorded."}</p>`,
+      }),
+    );
+  });
+
+  // Create a checkout session (Stripe, or a local URL). Platform-signed: the
+  // API authenticates the owner then forwards here (browser can't sign).
+  const CheckoutBody = z.object({
+    kind: z.enum(["topup", "subscription"]),
+    conglomerateId: z.string().uuid(),
+    amountCents: z.number().int().positive(),
+    allowanceCents: z.number().int().nonnegative().optional(),
+    plan: z.string().optional(),
+    label: z.string(),
+    successUrl: z.string().url(),
+    cancelUrl: z.string().url(),
+  });
+  app.post("/admin/billing/checkout", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
+    const parsed = CheckoutBody.safeParse(JSON.parse(raw || "{}"));
+    if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+    const out = await createBillingCheckout(secrets, { ...parsed.data, checkoutBase });
+    return c.json(out);
+  });
+
   // ── Stripe webhook (§9.4, §10) ────────────────────────────────────────────
   // The real-money mirror. Stripe POSTs checkout.session.completed here; we
   // verify its signature against STRIPE_WEBHOOK_SECRET, map the session back to
@@ -315,6 +379,29 @@ export function createGateway(opts?: {
     }
     const checkout = parseCheckoutCompleted(JSON.parse(raw || "{}"));
     if (!checkout) return c.json({ ignored: true }); // 200 so Stripe stops retrying
+
+    // Money-in to the wallet (§10 pillar 1, Stage 2) is keyed by our metadata,
+    // distinct from product sales (which credit a company's real balance).
+    if (checkout.metadata.kind === "topup" && checkout.metadata.conglomerateId) {
+      return c.json(
+        await creditWallet(sql, ledger, {
+          conglomerateId: checkout.metadata.conglomerateId,
+          amountCents: checkout.amountCents,
+          ref: `stripe:evt:${checkout.eventId}`,
+          kind: "topup",
+        }),
+      );
+    }
+    if (checkout.metadata.kind === "subscription" && checkout.metadata.conglomerateId) {
+      return c.json(
+        await activateSubscription(sql, ledger, {
+          conglomerateId: checkout.metadata.conglomerateId,
+          plan: checkout.metadata.plan ?? "builder",
+          allowanceCents: Number(checkout.metadata.allowanceCents ?? 0),
+          ref: `stripe:evt:${checkout.eventId}`,
+        }),
+      );
+    }
 
     // Map the payment back to us: prefer the originating payment link
     // (provider_ref = stripe:{productId}:{linkId}), fall back to metadata.

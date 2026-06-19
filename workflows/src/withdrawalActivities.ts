@@ -20,6 +20,9 @@ export interface WithdrawalResult {
   status: "paid" | "failed" | "already_done";
   transferId?: string;
   reason?: string;
+  /** Platform withdrawal fee withheld, and the net paid to the owner (§10 pillar 2). */
+  feeCents?: number;
+  netCents?: number;
 }
 
 export async function submitWithdrawal(input: WithdrawalInput): Promise<WithdrawalResult> {

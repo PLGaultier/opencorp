@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { renderLanding } from "./template";
 import { publishSite, sitesDir } from "./publish";
@@ -13,6 +14,11 @@ import { publishSite, sitesDir } from "./publish";
  * {PUBLIC_SITE_URL or DEPLOYD_URL}/sites/{slug}/ (no wildcard DNS needed).
  */
 function siteUrl(slug: string): string {
+  // Prod: Caddy serves each company at {slug}.{SITE_DOMAIN} over the shared sites
+  // volume with wildcard TLS, so report the real subdomain URL.
+  const domain = process.env.SITE_DOMAIN;
+  if (domain) return `https://${slug}.${domain}/`;
+  // Local: no Caddy/wildcard DNS, so deployd serves the files path-based itself.
   const base = (
     process.env.PUBLIC_SITE_URL ??
     process.env.DEPLOYD_URL ??
@@ -50,6 +56,16 @@ const DeployLanding = z.object({
 const app = new Hono();
 
 app.get("/healthz", (c) => c.json({ ok: true, service: "deployd" }));
+
+// Caddy on-demand-TLS authorization (§12): only mint a cert for {slug}.{domain}
+// when that company actually has a published site, so the wildcard can't be used
+// to issue certs for arbitrary subdomains. Caddy calls this with ?domain=<host>.
+app.get("/exists", (c) => {
+  const host = c.req.query("domain") ?? "";
+  const slug = host.split(".")[0] ?? "";
+  const ok = /^[a-z0-9-]{1,63}$/.test(slug) && existsSync(join(sitesDir(), slug));
+  return ok ? c.text("ok", 200) : c.text("unknown site", 404);
+});
 
 app.post("/deploy/landing", async (c) => {
   const body = DeployLanding.safeParse(await c.req.json());

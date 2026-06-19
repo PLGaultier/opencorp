@@ -8,7 +8,7 @@ import { adsFor, withinMonthlyCap, monthStartDay } from "./providers/ads";
 import { monthlyAdSpendCents } from "./ads";
 import { emailFor, isValidAddress, listUnsubscribeHeader, syncInbox } from "./providers/email";
 import { getAnalytics } from "./providers/analytics";
-import { FetchBrowser } from "./providers/browser";
+import type { BrowserProvider } from "./providers/browser";
 
 /**
  * Tool registry (§7.1): org, docs, db, web (M2) + payments, email, browser,
@@ -26,7 +26,7 @@ export interface ToolContext {
   ledger: Ledger;
   secrets: SecretStore;
   checkoutBase: string;
-  browser: FetchBrowser;
+  browser: BrowserProvider;
 }
 
 export interface ToolDef {
@@ -594,7 +594,12 @@ export const registry: Registry = {
       write: true,
       async handler(ctx, args: { to: string[]; subject: string; body: string; html?: string }) {
         const bad = args.to.filter((a) => !isValidAddress(a));
-        if (bad.length) return { error: "invalid_recipient", addresses: bad };
+        if (bad.length)
+          return {
+            error: "invalid_recipient",
+            addresses: bad,
+            hint: "to must be real external email addresses like user@example.com",
+          };
         const [c] = await ctx.sql<{ email_address: string | null }[]>`
           SELECT email_address FROM companies WHERE id = ${ctx.companyId}`;
         const from = c?.email_address;
@@ -610,14 +615,23 @@ export const registry: Registry = {
         }
 
         const provider = await emailFor(ctx.companyId, ctx.secrets, from);
-        const { messageId } = await provider.send({
-          from,
-          to: args.to,
-          subject: args.subject,
-          text: args.body,
-          html: args.html,
-          headers: listUnsubscribeHeader(from),
-        });
+        let messageId: string;
+        try {
+          ({ messageId } = await provider.send({
+            from,
+            to: args.to,
+            subject: args.subject,
+            text: args.body,
+            html: args.html,
+            headers: listUnsubscribeHeader(from),
+          }));
+        } catch (err) {
+          return {
+            error: "send_failed",
+            transport: provider.kind,
+            message: err instanceof Error ? err.message : String(err),
+          };
+        }
         await ctx.sql`
           INSERT INTO emails (company_id, direction, from_addr, to_addrs, subject, body_text, body_html, jmap_id, read)
           VALUES (${ctx.companyId}, 'out', ${from}, ${args.to}, ${args.subject}, ${args.body}, ${args.html ?? null}, ${messageId}, true)`;
@@ -715,29 +729,53 @@ export const registry: Registry = {
   },
 
   // ── browser-mcp (§7.1, §8 egress) ─────────────────────────────────────────
+  // browser-mcp (§7.1): a real per-task headless session. navigate/extract are
+  // read-only; click/type/submit_form act on the live page (submit_form is gated
+  // since it can send data / move money, §7.3). screenshot captures evidence.
   browser: {
     navigate: {
       schema: z.object({ url: z.string().url() }),
       write: false,
       async handler(ctx, args: { url: string }) {
-        return ctx.browser.navigate(args.url);
+        return ctx.browser.navigate(ctx.taskId, args.url);
       },
     },
     extract: {
-      // navigate already returns extracted text; alias kept for the §7.1 surface
-      schema: z.object({ url: z.string().url() }),
+      // Re-extract the current page, or navigate first when a url is given.
+      schema: z.object({ url: z.string().url().optional() }),
       write: false,
-      async handler(ctx, args: { url: string }) {
-        const { text, title } = await ctx.browser.navigate(args.url);
-        return { title, text };
+      async handler(ctx, args: { url?: string }) {
+        return ctx.browser.extract(ctx.taskId, args.url);
+      },
+    },
+    click: {
+      schema: z.object({ selector: z.string().min(1) }),
+      write: true,
+      async handler(ctx, args: { selector: string }) {
+        return ctx.browser.click(ctx.taskId, args.selector);
+      },
+    },
+    type: {
+      schema: z.object({ selector: z.string().min(1), text: z.string() }),
+      write: true,
+      async handler(ctx, args: { selector: string; text: string }) {
+        return ctx.browser.type(ctx.taskId, args.selector, args.text);
       },
     },
     submit_form: {
-      schema: z.object({ url: z.string().url(), fields: z.record(z.string()) }),
+      // Optional selector = the submit control to click; omitted = press Enter.
+      schema: z.object({ selector: z.string().optional() }),
       write: true,
       gated: true, // form submission can move money / send data (§7.3)
-      async handler() {
-        return { error: "not_supported", message: "Interactive browsing lands with the sandbox fleet (M4)." };
+      async handler(ctx, args: { selector?: string }) {
+        return ctx.browser.submitForm(ctx.taskId, args.selector);
+      },
+    },
+    screenshot: {
+      schema: z.object({}),
+      write: false,
+      async handler(ctx) {
+        return ctx.browser.screenshot(ctx.taskId);
       },
     },
   },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_URL, AUTH_DISABLED } from "@/lib/data";
 import { useSession } from "@/lib/auth-client";
@@ -16,6 +16,13 @@ export default function NewCompanyPage() {
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Founding a company requires an account — bounce signed-out visitors to login
+  // (once the session has resolved). The API also enforces this (requireAuth).
+  useEffect(() => {
+    if (!API_URL || AUTH_DISABLED) return;
+    if (!isPending && !session) router.replace("/login");
+  }, [isPending, session, router]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,20 +63,9 @@ export default function NewCompanyPage() {
     );
   }
 
-  if (!AUTH_DISABLED && !isPending && !session) {
-    return (
-      <main>
-        <h1>New company</h1>
-        <p className="sub">
-          Founding a company requires an account —{" "}
-          <a href="/login" style={{ textDecoration: "underline" }}>
-            sign in
-          </a>
-          .
-        </p>
-      </main>
-    );
-  }
+  // While the session resolves, or during the redirect for signed-out users,
+  // render nothing rather than flashing the form.
+  if (!AUTH_DISABLED && (isPending || !session)) return null;
 
   return (
     <main>

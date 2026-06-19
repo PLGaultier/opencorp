@@ -18,6 +18,11 @@ export const WorkerSpecSchema = z.object({
     .optional(),
   /** Langfuse trace id (§9.2); convention: the task id. */
   traceId: z.string().optional(),
+  /**
+   * Tier shift from the company's CEO "brains" level (§10): negative runs cheaper
+   * models, positive runs pricier ones. 0 (default) keeps the requested tier.
+   */
+  tierShift: z.number().optional(),
   /** Curated env injected into the sandbox (LLM endpoint, etc.); secrets arrive via Infisical. */
   env: z.record(z.string()).optional(),
   /** code-mcp workspace root (§7.1); defaults to a per-task dir in the sandbox. */

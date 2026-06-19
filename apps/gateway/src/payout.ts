@@ -24,7 +24,18 @@ export interface WithdrawalResult {
   status: "paid" | "failed" | "already_done";
   transferId?: string;
   reason?: string;
+  /** Platform withdrawal fee withheld, and the net paid to the owner (pillar 2). */
+  feeCents?: number;
+  netCents?: number;
 }
+
+// §10 (revenue pillar 2) — the platform's cut on cash-out. The company is
+// debited the full gross; the owner receives gross − fee; the fee is platform
+// revenue, recorded as its own ledger event for transparency. Basis points so
+// 250 = 2.5%. Set WITHDRAWAL_FEE_BPS=0 to disable.
+const WITHDRAWAL_FEE_BPS = Number(process.env.WITHDRAWAL_FEE_BPS ?? 250);
+const withdrawalFeeCents = (gross: number): number =>
+  Math.min(gross, Math.round((gross * WITHDRAWAL_FEE_BPS) / 10000));
 
 export async function processWithdrawal(
   sql: postgres.Sql,
@@ -60,16 +71,19 @@ export async function processWithdrawal(
   // connected account is per *conglomerate* (one per owner): KYC + the bank
   // account live on the human, so all of an owner's companies pay out to the
   // same acct_… The per-company balance was already split in our ledger.
+  // The owner receives the net; the platform keeps the fee (pillar 2).
+  const feeCents = withdrawalFeeCents(req.amountCents);
+  const netCents = req.amountCents - feeCents;
   const destination = await connectAccountFor(sql, req.conglomerateId);
   const provider = await paymentsFor(req.companyId, secrets, "");
   try {
     const { transferId } = await provider.payout({
-      amountCents: req.amountCents,
+      amountCents: netCents,
       currency: req.currency,
       destination,
     });
 
-    // 3. Confirm: mark paid + money_out ledger event.
+    // 3. Confirm: mark paid + money_out ledger event (gross out, fee, net paid).
     await sql`UPDATE withdrawals SET status = 'paid', provider_transfer_id = ${transferId}
               WHERE id = ${req.withdrawalId}`;
     await ledger.append({
@@ -79,12 +93,23 @@ export async function processWithdrawal(
       payload: {
         withdrawalId: req.withdrawalId,
         amountCents: req.amountCents,
+        feeCents,
+        netCents,
         currency: req.currency,
         transferId,
         provider: provider.kind,
       },
     });
-    return { status: "paid", transferId };
+    // Platform revenue from the withdrawal fee — its own line for transparency.
+    if (feeCents > 0) {
+      await ledger.append({
+        companyId: req.companyId,
+        actor: "system",
+        eventType: "platform_fee",
+        payload: { withdrawalId: req.withdrawalId, feeCents, ofAmountCents: req.amountCents, currency: req.currency, kind: "withdrawal" },
+      });
+    }
+    return { status: "paid", transferId, feeCents, netCents };
   } catch (err) {
     // Refund the reserve so a failed transfer never strands the balance.
     await sql.begin(async (tx) => {

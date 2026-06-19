@@ -11,6 +11,7 @@ import {
   llmConfigFromEnv,
   planDepartment,
   planHeartbeat,
+  tierShiftForLevel,
   tracerFromEnv,
   type DepartmentReport,
 } from "@opencorp/llm";
@@ -50,12 +51,13 @@ export interface TaskRow {
   name: string;
   slug: string;
   mission: string;
+  model_level: string;
 }
 
 async function taskRow(taskId: string): Promise<TaskRow> {
   const [t] = await sql<TaskRow[]>`
     SELECT t.id, t.company_id, c.conglomerate_id, t.title, t.description,
-           c.name, c.slug, c.mission
+           c.name, c.slug, c.mission, c.model_level
     FROM tasks t JOIN companies c ON c.id = t.company_id
     WHERE t.id = ${taskId}`;
   if (!t) throw new Error(`task not found: ${taskId}`);
@@ -69,19 +71,69 @@ export async function creditBalance(conglomerateId: string): Promise<number> {
   return Number(r!.balance);
 }
 
-/** Charge estimated credits up front; balance must stay non-negative (§4). */
-export async function chargeTask(taskId: string, estimate = 1): Promise<void> {
+// §10 pillar 1 — the wallet is real money (cents). We hold a generous estimate
+// up front (gates on balance so a task can't start unfunded), then reconcile to
+// the real metered API cost on success. ~80¢ comfortably covers a Haiku task and
+// most others; over-runs self-correct at reconcile.
+export const DEFAULT_TASK_ESTIMATE_CENTS = Number(process.env.TASK_COST_ESTIMATE_CENTS ?? 80);
+
+/** Hold the estimated cost (cents) up front; balance must stay non-negative (§4). */
+export async function chargeTask(
+  taskId: string,
+  estimateCents = DEFAULT_TASK_ESTIMATE_CENTS,
+): Promise<void> {
   const t = await taskRow(taskId);
   const balance = await creditBalance(t.conglomerate_id);
-  if (balance < estimate) throw new Error("insufficient_credits");
+  if (balance < estimateCents) throw new Error("insufficient_credits");
   await sql`
     INSERT INTO credit_entries (conglomerate_id, company_id, task_id, delta, reason)
-    VALUES (${t.conglomerate_id}, ${t.company_id}, ${taskId}, ${-estimate}, 'task_charge')`;
+    VALUES (${t.conglomerate_id}, ${t.company_id}, ${taskId}, ${-estimateCents}, 'task_charge')`;
   await ledger.append({
     companyId: t.company_id,
     actor: "system",
     eventType: "credit_change",
-    payload: { taskId, delta: -estimate, reason: "task_charge" },
+    payload: { taskId, delta: -estimateCents, reason: "task_charge", estimate: true },
+  });
+}
+
+/**
+ * Reconcile the up-front hold to the real metered API cost (§10 pillar 1).
+ * Posts the difference so the task's net charge equals the actual cost, records
+ * the cost on the public ledger, and is idempotent under Temporal retries.
+ */
+export async function reconcileTask(taskId: string, costMicroCents = 0): Promise<void> {
+  const t = await taskRow(taskId);
+  // idempotent: a reconcile marker already exists → done.
+  const [already] = await sql`
+    SELECT 1 FROM credit_entries WHERE task_id = ${taskId} AND meta->>'kind' = 'reconcile'`;
+  if (already) return;
+
+  const actualCents = Math.max(0, Math.round(costMicroCents / 1000));
+  const [charged] = await sql<{ total: string }[]>`
+    SELECT COALESCE(-SUM(delta), 0) AS total FROM credit_entries
+    WHERE task_id = ${taskId} AND reason = 'task_charge'`;
+  const estimateCents = Number(charged!.total);
+  const adjustment = estimateCents - actualCents; // >0 give back, <0 extra charge
+  const reason = adjustment >= 0 ? "task_refund" : "task_charge";
+  // Always insert a marker row (delta may be 0) so retries are no-ops.
+  await sql`
+    INSERT INTO credit_entries (conglomerate_id, company_id, task_id, delta, reason, meta)
+    VALUES (${t.conglomerate_id}, ${t.company_id}, ${taskId}, ${adjustment}, ${reason},
+            ${sql.json({ kind: "reconcile", actualCents })})`;
+  if (adjustment !== 0) {
+    await ledger.append({
+      companyId: t.company_id,
+      actor: "system",
+      eventType: "credit_change",
+      payload: { taskId, delta: adjustment, reason, kind: "reconcile" },
+    });
+  }
+  // Transparency: the real API cost of this task, on the public ledger.
+  await ledger.append({
+    companyId: t.company_id,
+    actor: "system",
+    eventType: "llm_cost",
+    payload: { taskId, costCents: actualCents, costMicroCents },
   });
 }
 
@@ -129,7 +181,9 @@ export async function setTaskState(
 }
 
 /** Claim a sandbox, run the agent loop inside it, release it (§8, §5.3). */
-export async function runWorker(taskId: string): Promise<{ summary: string; steps: number }> {
+export async function runWorker(
+  taskId: string,
+): Promise<{ summary: string; steps: number; costMicroCents?: number }> {
   const t = await taskRow(taskId);
   const token = signToken({
     companyId: t.company_id,
@@ -146,6 +200,21 @@ export async function runWorker(taskId: string): Promise<{ summary: string; step
   // public page links to the trace even for failed/timed-out tasks.
   await sql`UPDATE tasks SET trace_id = ${taskId} WHERE id = ${taskId}`;
   const sandbox = await sandboxes.claim({ taskId, companyId: t.company_id, budgets });
+  // Send a keepalive heartbeat every 60 s so Temporal doesn't kill the activity
+  // during multi-minute LLM calls (the per-step heartbeat alone isn't enough —
+  // it only fires after the LLM responds, not during the API call).
+  let keepAlive: ReturnType<typeof setInterval> | undefined;
+  const startKeepAlive = () => {
+    clearInterval(keepAlive);
+    keepAlive = setInterval(() => {
+      try {
+        heartbeat("thinking");
+      } catch {
+        /* outside an activity context */
+      }
+    }, 60_000);
+  };
+  startKeepAlive();
   try {
     return await sandbox.execAgent(
       {
@@ -155,12 +224,15 @@ export async function runWorker(taskId: string): Promise<{ summary: string; step
         company: { name: t.name, slug: t.slug, mission: t.mission },
         budgets,
         traceId: taskId,
+        tierShift: tierShiftForLevel(t.model_level),
       },
       // §5.3 "every step streamed": step events come back from the sandbox
       // (in-process, pipe, or vsock) and on this side become a Temporal
-      // heartbeat (long LLM tasks must outlive the 2-min heartbeatTimeout) and a
-      // ledger event — the dashboard terminal renders the worker thinking.
+      // heartbeat and a ledger event — the dashboard terminal renders the
+      // worker thinking. Reset the keepalive timer each step so we don't
+      // double-fire during quiet periods right after a tool call.
       (step) => {
+        startKeepAlive();
         try {
           heartbeat(step.n);
         } catch {
@@ -177,6 +249,7 @@ export async function runWorker(taskId: string): Promise<{ summary: string; step
       },
     );
   } finally {
+    clearInterval(keepAlive);
     await sandbox.release();
   }
 }
@@ -253,10 +326,13 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
   );
   await tracer?.flush();
 
-  const applied = await applyCeoPlan(sql, ledger, company, plan, {
-    promptHash: hash,
-    source: "heartbeat",
-  });
+  // Don't queue new tasks the wallet can't fund a single task's estimate of —
+  // they'd fail on charge and the next heartbeat would re-queue them, spiraling.
+  const balance = await creditBalance(company.conglomerateId);
+  const applied =
+    balance >= DEFAULT_TASK_ESTIMATE_CENTS
+      ? await applyCeoPlan(sql, ledger, company, plan, { promptHash: hash, source: "heartbeat" })
+      : { createdTasks: [], missionUpdated: false };
   await ledger.append({
     companyId,
     actor: "ceo",
@@ -314,6 +390,10 @@ export async function pickNextTask(companyId: string): Promise<DispatchDecision>
       AND created_at > now() - interval '24 hours'`;
   if (Number(spent!.n) >= Number(c.daily_credit_cap))
     return { taskId: null, reason: "daily_credit_cap_reached" };
+
+  // Out of runway: stop cleanly rather than dispatch a task that fails on charge.
+  if ((await creditBalance(c.conglomerate_id)) < DEFAULT_TASK_ESTIMATE_CENTS)
+    return { taskId: null, reason: "insufficient_funds" };
 
   const [next] = await sql<{ id: string }[]>`
     SELECT id FROM tasks

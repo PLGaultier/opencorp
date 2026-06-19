@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { extractCompanySpec, llmConfigFromEnv, type CompanySpec } from "@opencorp/llm";
 import { Ledger, PgStore, type LedgerEventInput } from "@opencorp/ledgerd";
@@ -19,6 +20,9 @@ const UMAMI_URL = process.env.UMAMI_URL;
 const UMAMI_TOKEN = process.env.UMAMI_TOKEN;
 const DEPLOYD_URL = process.env.DEPLOYD_URL ?? "http://localhost:3002";
 const DOMAIN = process.env.OPENCORP_DOMAIN ?? "localhost";
+// The gateway serves the local checkout page; starter payment links point here.
+const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3004";
+const CHECKOUT_BASE = process.env.CHECKOUT_BASE_URL ?? `${GATEWAY_URL}/checkout`;
 
 const sql = postgres(DATABASE_URL, { max: 5 });
 const ledger = new Ledger(new PgStore(DATABASE_URL));
@@ -185,6 +189,50 @@ export async function seedTasks(input: { companyId: string; spec: CompanySpec })
       WHERE NOT EXISTS (
         SELECT 1 FROM tasks WHERE company_id = ${input.companyId} AND title = ${t.title}
       )`;
+  }
+}
+
+/**
+ * Deterministic starter commerce (§6, §14) — seed a starter product + a *paused*
+ * local ads campaign at creation, before any CEO work, so the company launches
+ * already equipped to sell. Nothing spends or charges until the owner/CEO
+ * activates it (the campaign starts paused; the product is just a listing).
+ * Idempotent: a no-op once a starter product exists.
+ */
+export async function seedStarterCommerce(input: { companyId: string; spec: CompanySpec }): Promise<void> {
+  const { companyId, spec } = input;
+  const productId = randomUUID();
+  const campaignId = randomUUID();
+  const priceCents = Number(process.env.STARTER_PRODUCT_CENTS ?? 2900); // default tier; CEO can reprice
+  const budgetCents = Number(process.env.STARTER_AD_DAILY_CENTS ?? 500); // daily budget; campaign is paused
+  const paymentLink = `${CHECKOUT_BASE}/pay/${spec.slug}/${productId}`;
+  const creative = {
+    headline: spec.landing_copy.headline,
+    body: spec.landing_copy.subheadline || spec.mission.slice(0, 140),
+    linkUrl: `${paymentLink}?c=${campaignId}`, // ?c tag → ROAS attribution (§14)
+  };
+  const seeded = await sql.begin(async (tx) => {
+    const [exists] = await tx`
+      SELECT 1 FROM products WHERE company_id = ${companyId} AND provider_ref LIKE 'local:starter:%'`;
+    if (exists) return false;
+    await tx`
+      INSERT INTO products (id, company_id, name, price_cents, currency, provider_ref, payment_link)
+      VALUES (${productId}, ${companyId}, ${`${spec.name} — Starter`}, ${priceCents}, 'eur',
+              ${`local:starter:${productId}`}, ${paymentLink})`;
+    await tx`
+      INSERT INTO ad_campaigns
+        (id, company_id, product_id, provider, status, name, objective, budget_cents, budget_type, creative)
+      VALUES (${campaignId}, ${companyId}, ${productId}, 'local', 'paused', 'Starter campaign',
+              'OUTCOME_SALES', ${budgetCents}, 'daily', ${tx.json(creative)})`;
+    return true;
+  });
+  if (seeded) {
+    await ledger.append({
+      companyId,
+      actor: "system",
+      eventType: "starter_commerce_seeded",
+      payload: { productId, priceCents, paymentLink, campaignId, campaignStatus: "paused", budgetCents },
+    });
   }
 }
 
