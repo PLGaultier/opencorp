@@ -276,6 +276,22 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
   const ctx = await gatherCeoContext(sql, company);
   const { system, hash } = loadCeoPrompt(company);
 
+  // §10 cost: a freshly-founded company already has the deterministic launch
+  // playbook queued and no task has reported back yet — there's nothing for the
+  // C-suite to react to, so skip the paid planning fan-out (3 dept + 1 CEO call)
+  // until the first results land. The heartbeat still dispatches the queued work.
+  if (ctx.recentReports.length === 0 && ctx.queuedTasks > 0) {
+    await ledger.append({
+      companyId,
+      actor: "ceo",
+      eventType: "ceo_plan",
+      payload: { skipped: "awaiting_first_results", queuedTasks: ctx.queuedTasks, promptHash: hash },
+    });
+    return {
+      userBrief: `Launch playbook underway — ${ctx.queuedTasks} task(s) queued. I'll plan the next moves once the first results come back.`,
+    };
+  }
+
   const cfg = llmConfigFromEnv();
   const tracer = tracerFromEnv();
   const day = new Date().toISOString().slice(0, 10);

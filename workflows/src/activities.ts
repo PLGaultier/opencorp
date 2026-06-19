@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
-import { extractCompanySpec, llmConfigFromEnv, type CompanySpec } from "@opencorp/llm";
+import { extractCompanySpec, launchPlaybook, llmConfigFromEnv, type CompanySpec } from "@opencorp/llm";
 import { Ledger, PgStore, type LedgerEventInput } from "@opencorp/ledgerd";
 import { StalwartAdmin, deriveMailboxPassword, stalwartEnv } from "@opencorp/stalwart";
 import { InfisicalAdmin, InfisicalClient, infisicalEnv } from "@opencorp/secrets";
@@ -181,15 +181,32 @@ export async function deployLanding(input: {
   return { url: ((await res.json()) as { url: string }).url };
 }
 
-export async function seedTasks(input: { companyId: string; spec: CompanySpec }): Promise<void> {
-  for (const t of input.spec.initial_tasks) {
+/** Seed a fixed list of tasks, deduped by title (so Temporal retries don't double-queue). */
+async function seedTaskList(
+  companyId: string,
+  tasks: { title: string; description: string; priority: number }[],
+): Promise<void> {
+  for (const t of tasks) {
     await sql`
       INSERT INTO tasks (company_id, title, description, status, priority)
-      SELECT ${input.companyId}, ${t.title}, ${t.description}, 'queued', ${t.priority}
+      SELECT ${companyId}, ${t.title}, ${t.description}, 'queued', ${t.priority}
       WHERE NOT EXISTS (
-        SELECT 1 FROM tasks WHERE company_id = ${input.companyId} AND title = ${t.title}
+        SELECT 1 FROM tasks WHERE company_id = ${companyId} AND title = ${t.title}
       )`;
   }
+}
+
+/**
+ * §6/§10 — seed the deterministic week-1 launch playbook (no LLM tokens). Replaces
+ * the founding LLM's `initial_tasks`; the CEO plans real work from heartbeat 2.
+ */
+export async function seedLaunchPlaybook(input: { companyId: string; spec: CompanySpec }): Promise<void> {
+  await seedTaskList(input.companyId, launchPlaybook(input.spec));
+}
+
+/** Legacy: seed the spec's LLM-generated tasks (offline fallback still provides them). */
+export async function seedTasks(input: { companyId: string; spec: CompanySpec }): Promise<void> {
+  await seedTaskList(input.companyId, input.spec.initial_tasks ?? []);
 }
 
 /**

@@ -54,8 +54,9 @@ export async function CreateCompany(input: CreateCompanyInput): Promise<CreateCo
   // ads campaign so the company is already equipped to sell before any CEO work.
   await act.seedStarterCommerce({ companyId, spec });
 
-  // 6. seed tasks + schedule the daily heartbeat (§6 step 4) + ledger event
-  await act.seedTasks({ companyId, spec });
+  // 6. seed the deterministic launch playbook (§10, no LLM) + schedule the daily
+  // heartbeat (§6 step 4) + ledger event. The CEO plans real work from heartbeat 2.
+  await act.seedLaunchPlaybook({ companyId, spec });
   await act.scheduleHeartbeat(companyId);
   await act.appendLedger({
     companyId,
