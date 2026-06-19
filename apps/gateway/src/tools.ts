@@ -4,9 +4,11 @@ import postgres from "postgres";
 import type { Ledger } from "@opencorp/ledgerd";
 import type { SecretStore } from "./secrets";
 import { paymentsFor } from "./providers/payments";
+import { adsFor, withinMonthlyCap, monthStartDay } from "./providers/ads";
+import { monthlyAdSpendCents } from "./ads";
 import { emailFor, isValidAddress, listUnsubscribeHeader, syncInbox } from "./providers/email";
 import { getAnalytics } from "./providers/analytics";
-import { FetchBrowser } from "./providers/browser";
+import type { BrowserProvider } from "./providers/browser";
 
 /**
  * Tool registry (§7.1): org, docs, db, web (M2) + payments, email, browser,
@@ -24,7 +26,7 @@ export interface ToolContext {
   ledger: Ledger;
   secrets: SecretStore;
   checkoutBase: string;
-  browser: FetchBrowser;
+  browser: BrowserProvider;
 }
 
 export interface ToolDef {
@@ -32,6 +34,14 @@ export interface ToolDef {
   write: boolean;
   /** Irreversible / money-out action: requires autonomy_level=full (§7.3). */
   gated?: boolean;
+  /**
+   * Makes `bounded` autonomy meaningful for a gated tool (§14): when the company
+   * is `bounded`, run this check — `true` auto-approves (within the owner's
+   * budget cap), `false` parks for approval like `supervised`. `full` always
+   * runs; `supervised` always parks. Omitted → `bounded` behaves like
+   * `supervised` for this tool.
+   */
+  budgetGate?: (ctx: ToolContext, args: never) => Promise<boolean>;
   /**
    * Executed inside the worker's own sandbox, not here (§7.1 code-mcp). The
    * gateway still authorizes + rate-limits + audits the call; the handler only
@@ -44,6 +54,24 @@ export interface ToolDef {
 }
 
 type Registry = Record<string, Record<string, ToolDef>>;
+
+/** Resolve a company's conglomerate + connected Meta ad account (for ads-mcp). */
+async function adsContext(ctx: ToolContext): Promise<{ conglomerateId: string; metaAccount: string | null }> {
+  const [c] = await ctx.sql<{ conglomerate_id: string; meta_ad_account_id: string | null }[]>`
+    SELECT cm.conglomerate_id, cg.meta_ad_account_id
+    FROM companies cm JOIN conglomerates cg ON cg.id = cm.conglomerate_id
+    WHERE cm.id = ${ctx.companyId}`;
+  return { conglomerateId: c!.conglomerate_id, metaAccount: c?.meta_ad_account_id ?? null };
+}
+
+/** True when this company's month-to-date ad spend + a new budget fits the cap. */
+async function withinCapForBudget(ctx: ToolContext, budgetCents: number): Promise<boolean> {
+  const [c] = await ctx.sql<{ ad_monthly_budget_cap_cents: string }[]>`
+    SELECT ad_monthly_budget_cap_cents FROM companies WHERE id = ${ctx.companyId}`;
+  const cap = Number(c?.ad_monthly_budget_cap_cents ?? 0);
+  const spent = await monthlyAdSpendCents(ctx.sql, ctx.companyId);
+  return withinMonthlyCap(spent, budgetCents, cap);
+}
 
 const TaskPatch = z.object({
   taskId: z.string().uuid(),
@@ -282,14 +310,15 @@ export const registry: Registry = {
         const provider = await paymentsFor(ctx.companyId, ctx.secrets, ctx.checkoutBase);
         const { providerRef, paymentLink } = await provider.createProduct({
           productId,
+          companyId: ctx.companyId,
           slug: c!.slug,
           name: args.name,
           priceCents: args.priceCents,
           currency: args.currency,
         });
         await ctx.sql`
-          INSERT INTO products (id, company_id, name, price_cents, currency, provider_ref)
-          VALUES (${productId}, ${ctx.companyId}, ${args.name}, ${args.priceCents}, ${args.currency}, ${providerRef})`;
+          INSERT INTO products (id, company_id, name, price_cents, currency, provider_ref, payment_link)
+          VALUES (${productId}, ${ctx.companyId}, ${args.name}, ${args.priceCents}, ${args.currency}, ${providerRef}, ${paymentLink})`;
         await ctx.ledger.append({
           companyId: ctx.companyId,
           actor: `worker:${ctx.taskId}`,
@@ -327,15 +356,13 @@ export const registry: Registry = {
       write: false,
       async handler(ctx, args: { productId: string }) {
         const [c] = await ctx.sql<{ slug: string }[]>`SELECT slug FROM companies WHERE id = ${ctx.companyId}`;
-        const [p] = await ctx.sql<{ provider_ref: string | null }[]>`
-          SELECT provider_ref FROM products WHERE id = ${args.productId} AND company_id = ${ctx.companyId}`;
+        const [p] = await ctx.sql<{ payment_link: string | null }[]>`
+          SELECT payment_link FROM products WHERE id = ${args.productId} AND company_id = ${ctx.companyId}`;
         if (!p) return { error: "not_found" };
-        // Stripe links are stored in provider_ref; local links are deterministic.
-        const url =
-          p.provider_ref?.startsWith("stripe:")
-            ? undefined
-            : `${ctx.checkoutBase}/pay/${c!.slug}/${args.productId}`;
-        return { url: url ?? `${ctx.checkoutBase}/pay/${c!.slug}/${args.productId}` };
+        // The stored link is authoritative (Stripe's buy.stripe.com URL, or the
+        // local /checkout link). Older products predate the column → derive the
+        // deterministic local link as a fallback.
+        return { url: p.payment_link ?? `${ctx.checkoutBase}/pay/${c!.slug}/${args.productId}` };
       },
     },
     get_revenue: {
@@ -359,6 +386,202 @@ export const registry: Registry = {
     },
   },
 
+  // ── ads-mcp (§14 ads adapter) ─────────────────────────────────────────────
+  // Budgeted Meta/Google campaigns. The provider bills the owner's payment
+  // method directly; spend is mirrored to our ledger and bounded by the
+  // company's monthly cap. Campaigns are created PAUSED; launch + budget raises
+  // are money-out (gated): `bounded` auto-approves within the cap (budgetGate),
+  // `supervised` parks for approval, `full` always runs (§7.3).
+  ads: {
+    create_campaign: {
+      schema: z.object({
+        productId: z.string().uuid(),
+        name: z.string().min(1).max(200),
+        objective: z.enum(["OUTCOME_SALES", "OUTCOME_TRAFFIC", "OUTCOME_AWARENESS", "OUTCOME_LEADS"]).default("OUTCOME_SALES"),
+        budgetCents: z.number().int().min(100).max(100_000_000),
+        budgetType: z.enum(["daily", "lifetime"]).default("daily"),
+        creative: z.object({
+          headline: z.string().min(1).max(200),
+          body: z.string().min(1).max(2000),
+          imageUrl: z.string().url().optional(),
+        }),
+      }),
+      write: true,
+      async handler(
+        ctx,
+        args: {
+          productId: string;
+          name: string;
+          objective: string;
+          budgetCents: number;
+          budgetType: "daily" | "lifetime";
+          creative: { headline: string; body: string; imageUrl?: string };
+        },
+      ) {
+        const [p] = await ctx.sql<{ payment_link: string | null; slug: string }[]>`
+          SELECT pr.payment_link, c.slug FROM products pr
+          JOIN companies c ON c.id = pr.company_id
+          WHERE pr.id = ${args.productId} AND pr.company_id = ${ctx.companyId}`;
+        if (!p) return { error: "product_not_found" };
+        const campaignId = randomUUID();
+        const { conglomerateId, metaAccount } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        // Tag the destination with the campaign id so a sale through this ad is
+        // attributed back to it for ROAS (§14). The checkout reads ?c=.
+        const base = p.payment_link ?? `${ctx.checkoutBase}/pay/${p.slug}/${args.productId}`;
+        const linkUrl = `${base}${base.includes("?") ? "&" : "?"}c=${campaignId}`;
+        const { providerRef } = await ads.createCampaign({
+          campaignId,
+          name: args.name,
+          objective: args.objective,
+          budgetCents: args.budgetCents,
+          budgetType: args.budgetType,
+          creative: { ...args.creative, linkUrl },
+        });
+        await ctx.sql`
+          INSERT INTO ad_campaigns (id, company_id, product_id, provider, provider_ref, name, objective, status, budget_cents, budget_type, creative)
+          VALUES (${campaignId}, ${ctx.companyId}, ${args.productId}, ${ads.kind}, ${providerRef},
+                  ${args.name}, ${args.objective}, 'paused', ${args.budgetCents}, ${args.budgetType},
+                  ${ctx.sql.json({ ...args.creative, linkUrl })})`;
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "ad_campaign_created",
+          payload: { campaignId, productId: args.productId, objective: args.objective, budgetCents: args.budgetCents, budgetType: args.budgetType, provider: ads.kind },
+        });
+        return { campaignId, status: "paused", provider: ads.kind, note: "created paused — launch_campaign to go live (gated)" };
+      },
+    },
+    set_budget: {
+      schema: z.object({ campaignId: z.string().uuid(), budgetCents: z.number().int().min(100).max(100_000_000) }),
+      write: true,
+      gated: true, // money-out: a budget raise increases real spend
+      async budgetGate(ctx, args: { campaignId: string; budgetCents: number }) {
+        return withinCapForBudget(ctx, args.budgetCents);
+      },
+      async handler(ctx, args: { campaignId: string; budgetCents: number }) {
+        const [c] = await ctx.sql<{ provider_ref: string | null; budget_type: "daily" | "lifetime" }[]>`
+          SELECT provider_ref, budget_type FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        if (!c) return { error: "campaign_not_found" };
+        const { conglomerateId, metaAccount } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        if (c.provider_ref) await ads.setBudget(c.provider_ref, args.budgetCents, c.budget_type);
+        await ctx.sql`UPDATE ad_campaigns SET budget_cents = ${args.budgetCents} WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "ad_budget_set",
+          payload: { campaignId: args.campaignId, budgetCents: args.budgetCents },
+        });
+        return { updated: true, budgetCents: args.budgetCents };
+      },
+    },
+    launch_campaign: {
+      schema: z.object({ campaignId: z.string().uuid() }),
+      write: true,
+      gated: true, // money-out: PAUSED → ACTIVE starts spending
+      async budgetGate(ctx, args: { campaignId: string }) {
+        const [c] = await ctx.sql<{ budget_cents: string }[]>`
+          SELECT budget_cents FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        return c ? withinCapForBudget(ctx, Number(c.budget_cents)) : false;
+      },
+      async handler(ctx, args: { campaignId: string }) {
+        const [c] = await ctx.sql<{ provider_ref: string | null }[]>`
+          SELECT provider_ref FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        if (!c) return { error: "campaign_not_found" };
+        const { conglomerateId, metaAccount } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        if (c.provider_ref) await ads.launch(c.provider_ref);
+        await ctx.sql`UPDATE ad_campaigns SET status = 'active', launched_at = now() WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "ad_campaign_launched",
+          payload: { campaignId: args.campaignId },
+        });
+        return { launched: true, status: "active" };
+      },
+    },
+    pause_campaign: {
+      schema: z.object({ campaignId: z.string().uuid() }),
+      write: true, // always safe — pausing only ever reduces spend
+      async handler(ctx, args: { campaignId: string }) {
+        const [c] = await ctx.sql<{ provider_ref: string | null }[]>`
+          SELECT provider_ref FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        if (!c) return { error: "campaign_not_found" };
+        const { conglomerateId, metaAccount } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        if (c.provider_ref) await ads.pause(c.provider_ref);
+        await ctx.sql`UPDATE ad_campaigns SET status = 'paused' WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "ad_campaign_paused",
+          payload: { campaignId: args.campaignId, reason: "manual" },
+        });
+        return { paused: true };
+      },
+    },
+    list_campaigns: {
+      schema: z.object({}),
+      write: false,
+      async handler(ctx) {
+        // This month's spend + attributed revenue + ROAS so the CEO/CMO can
+        // judge performance (the same numbers the autonomous optimizer uses).
+        const rows = await ctx.sql<
+          { id: string; name: string; objective: string; status: string; budget_cents: string; budget_type: string; product_id: string | null; spend_cents: string; revenue_cents: string }[]
+        >`
+          SELECT ac.id, ac.name, ac.objective, ac.status, ac.budget_cents, ac.budget_type, ac.product_id,
+                 COALESCE((SELECT SUM(spend_cents) FROM ad_spend s
+                           WHERE s.campaign_id = ac.id AND s.day >= ${monthStartDay()}), 0) AS spend_cents,
+                 COALESCE((SELECT SUM(amount_cents) FROM payments p
+                           WHERE p.campaign_id = ac.id AND p.created_at >= date_trunc('month', now())), 0) AS revenue_cents
+          FROM ad_campaigns ac WHERE ac.company_id = ${ctx.companyId}
+          ORDER BY ac.created_at DESC LIMIT 100`;
+        return rows.map((r) => {
+          const spendCents = Number(r.spend_cents);
+          const revenueCents = Number(r.revenue_cents);
+          return {
+            id: r.id, name: r.name, objective: r.objective, status: r.status,
+            budgetCents: Number(r.budget_cents), budgetType: r.budget_type, productId: r.product_id,
+            spendCents, revenueCents,
+            roas: spendCents > 0 ? Math.round((revenueCents / spendCents) * 100) / 100 : null,
+          };
+        });
+      },
+    },
+    get_campaign_insights: {
+      schema: z.object({ campaignId: z.string().uuid(), rangeDays: z.number().int().min(1).max(90).default(30) }),
+      write: false,
+      async handler(ctx, args: { campaignId: string; rangeDays: number }) {
+        const [c] = await ctx.sql<{ id: string }[]>`
+          SELECT id FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
+        if (!c) return { error: "campaign_not_found" };
+        const rows = await ctx.sql<{ day: string; spend_cents: string; impressions: string; clicks: string }[]>`
+          SELECT day, spend_cents, impressions, clicks FROM ad_spend
+          WHERE campaign_id = ${args.campaignId}
+            AND day >= ${new Date(Date.now() - args.rangeDays * 86_400_000).toISOString().slice(0, 10)}
+          ORDER BY day`;
+        const totals = rows.reduce(
+          (a, r) => ({ spendCents: a.spendCents + Number(r.spend_cents), impressions: a.impressions + Number(r.impressions), clicks: a.clicks + Number(r.clicks) }),
+          { spendCents: 0, impressions: 0, clicks: 0 },
+        );
+        // Attributed revenue over the same window → ROAS (§14).
+        const [rev] = await ctx.sql<{ revenue_cents: string }[]>`
+          SELECT COALESCE(SUM(amount_cents), 0) AS revenue_cents FROM payments
+          WHERE campaign_id = ${args.campaignId}
+            AND created_at >= ${new Date(Date.now() - args.rangeDays * 86_400_000).toISOString()}`;
+        const revenueCents = Number(rev!.revenue_cents);
+        const roas = totals.spendCents > 0 ? Math.round((revenueCents / totals.spendCents) * 100) / 100 : null;
+        return {
+          campaignId: args.campaignId,
+          totals: { ...totals, revenueCents, roas },
+          daily: rows.map((r) => ({ day: r.day, spendCents: Number(r.spend_cents), impressions: Number(r.impressions), clicks: Number(r.clicks) })),
+        };
+      },
+    },
+  },
+
   // ── email-mcp (§7.1, §7.3 hygiene) ────────────────────────────────────────
   email: {
     send_email: {
@@ -371,7 +594,12 @@ export const registry: Registry = {
       write: true,
       async handler(ctx, args: { to: string[]; subject: string; body: string; html?: string }) {
         const bad = args.to.filter((a) => !isValidAddress(a));
-        if (bad.length) return { error: "invalid_recipient", addresses: bad };
+        if (bad.length)
+          return {
+            error: "invalid_recipient",
+            addresses: bad,
+            hint: "to must be real external email addresses like user@example.com",
+          };
         const [c] = await ctx.sql<{ email_address: string | null }[]>`
           SELECT email_address FROM companies WHERE id = ${ctx.companyId}`;
         const from = c?.email_address;
@@ -387,14 +615,23 @@ export const registry: Registry = {
         }
 
         const provider = await emailFor(ctx.companyId, ctx.secrets, from);
-        const { messageId } = await provider.send({
-          from,
-          to: args.to,
-          subject: args.subject,
-          text: args.body,
-          html: args.html,
-          headers: listUnsubscribeHeader(from),
-        });
+        let messageId: string;
+        try {
+          ({ messageId } = await provider.send({
+            from,
+            to: args.to,
+            subject: args.subject,
+            text: args.body,
+            html: args.html,
+            headers: listUnsubscribeHeader(from),
+          }));
+        } catch (err) {
+          return {
+            error: "send_failed",
+            transport: provider.kind,
+            message: err instanceof Error ? err.message : String(err),
+          };
+        }
         await ctx.sql`
           INSERT INTO emails (company_id, direction, from_addr, to_addrs, subject, body_text, body_html, jmap_id, read)
           VALUES (${ctx.companyId}, 'out', ${from}, ${args.to}, ${args.subject}, ${args.body}, ${args.html ?? null}, ${messageId}, true)`;
@@ -492,29 +729,53 @@ export const registry: Registry = {
   },
 
   // ── browser-mcp (§7.1, §8 egress) ─────────────────────────────────────────
+  // browser-mcp (§7.1): a real per-task headless session. navigate/extract are
+  // read-only; click/type/submit_form act on the live page (submit_form is gated
+  // since it can send data / move money, §7.3). screenshot captures evidence.
   browser: {
     navigate: {
       schema: z.object({ url: z.string().url() }),
       write: false,
       async handler(ctx, args: { url: string }) {
-        return ctx.browser.navigate(args.url);
+        return ctx.browser.navigate(ctx.taskId, args.url);
       },
     },
     extract: {
-      // navigate already returns extracted text; alias kept for the §7.1 surface
-      schema: z.object({ url: z.string().url() }),
+      // Re-extract the current page, or navigate first when a url is given.
+      schema: z.object({ url: z.string().url().optional() }),
       write: false,
-      async handler(ctx, args: { url: string }) {
-        const { text, title } = await ctx.browser.navigate(args.url);
-        return { title, text };
+      async handler(ctx, args: { url?: string }) {
+        return ctx.browser.extract(ctx.taskId, args.url);
+      },
+    },
+    click: {
+      schema: z.object({ selector: z.string().min(1) }),
+      write: true,
+      async handler(ctx, args: { selector: string }) {
+        return ctx.browser.click(ctx.taskId, args.selector);
+      },
+    },
+    type: {
+      schema: z.object({ selector: z.string().min(1), text: z.string() }),
+      write: true,
+      async handler(ctx, args: { selector: string; text: string }) {
+        return ctx.browser.type(ctx.taskId, args.selector, args.text);
       },
     },
     submit_form: {
-      schema: z.object({ url: z.string().url(), fields: z.record(z.string()) }),
+      // Optional selector = the submit control to click; omitted = press Enter.
+      schema: z.object({ selector: z.string().optional() }),
       write: true,
       gated: true, // form submission can move money / send data (§7.3)
-      async handler() {
-        return { error: "not_supported", message: "Interactive browsing lands with the sandbox fleet (M4)." };
+      async handler(ctx, args: { selector?: string }) {
+        return ctx.browser.submitForm(ctx.taskId, args.selector);
+      },
+    },
+    screenshot: {
+      schema: z.object({}),
+      write: false,
+      async handler(ctx) {
+        return ctx.browser.screenshot(ctx.taskId);
       },
     },
   },

@@ -11,6 +11,8 @@ import type { Ledger } from "@opencorp/ledgerd";
 export interface PaymentConfirmation {
   companyId: string;
   productId: string | null;
+  /** Ad campaign that drove the sale (§14 ROAS attribution); null = organic. */
+  campaignId?: string | null;
   amountCents: number;
   currency: string;
   providerRef: string;
@@ -30,8 +32,8 @@ export async function recordPayment(
     if (dup) return { recorded: false, netCents };
 
     await tx`
-      INSERT INTO payments (company_id, product_id, amount_cents, currency, provider_ref, fee_cents, net_cents)
-      VALUES (${p.companyId}, ${p.productId}, ${p.amountCents}, ${p.currency},
+      INSERT INTO payments (company_id, product_id, campaign_id, amount_cents, currency, provider_ref, fee_cents, net_cents)
+      VALUES (${p.companyId}, ${p.productId}, ${p.campaignId ?? null}, ${p.amountCents}, ${p.currency},
               ${p.providerRef}, ${feeCents}, ${netCents})`;
     await tx`
       UPDATE companies SET real_balance_cents = real_balance_cents + ${netCents}
@@ -43,6 +45,7 @@ export async function recordPayment(
       eventType: "money_in",
       payload: {
         productId: p.productId,
+        campaignId: p.campaignId ?? null,
         amountCents: p.amountCents,
         feeCents,
         netCents,

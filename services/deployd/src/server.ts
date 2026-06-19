@@ -1,9 +1,44 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { join, extname } from "node:path";
 import { renderLanding } from "./template";
-import { publishSite } from "./publish";
+import { publishSite, sitesDir } from "./publish";
 
 /** deployd HTTP API — called by Temporal activities (and later web-mcp). */
+
+/**
+ * Where published sites are reachable. In prod Caddy serves {slug}.{domain};
+ * locally there's no Caddy, so deployd serves them itself path-based at
+ * {PUBLIC_SITE_URL or DEPLOYD_URL}/sites/{slug}/ (no wildcard DNS needed).
+ */
+function siteUrl(slug: string): string {
+  // Prod: Caddy serves each company at {slug}.{SITE_DOMAIN} over the shared sites
+  // volume with wildcard TLS, so report the real subdomain URL.
+  const domain = process.env.SITE_DOMAIN;
+  if (domain) return `https://${slug}.${domain}/`;
+  // Local: no Caddy/wildcard DNS, so deployd serves the files path-based itself.
+  const base = (
+    process.env.PUBLIC_SITE_URL ??
+    process.env.DEPLOYD_URL ??
+    `http://localhost:${process.env.PORT ?? 3002}`
+  ).replace(/\/$/, "");
+  return `${base}/sites/${slug}/`;
+}
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".ico": "image/x-icon",
+  ".txt": "text/plain; charset=utf-8",
+};
 
 const DeployLanding = z.object({
   slug: z.string(),
@@ -22,6 +57,16 @@ const app = new Hono();
 
 app.get("/healthz", (c) => c.json({ ok: true, service: "deployd" }));
 
+// Caddy on-demand-TLS authorization (§12): only mint a cert for {slug}.{domain}
+// when that company actually has a published site, so the wildcard can't be used
+// to issue certs for arbitrary subdomains. Caddy calls this with ?domain=<host>.
+app.get("/exists", (c) => {
+  const host = c.req.query("domain") ?? "";
+  const slug = host.split(".")[0] ?? "";
+  const ok = /^[a-z0-9-]{1,63}$/.test(slug) && existsSync(join(sitesDir(), slug));
+  return ok ? c.text("ok", 200) : c.text("unknown site", 404);
+});
+
 app.post("/deploy/landing", async (c) => {
   const body = DeployLanding.safeParse(await c.req.json());
   if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
@@ -35,8 +80,26 @@ app.post("/deploy/landing", async (c) => {
     copy: d.copy,
   });
   const { root } = await publishSite({ slug: d.slug, files: { "index.html": html } });
-  const domain = process.env.OPENCORP_DOMAIN ?? "localhost";
-  return c.json({ ok: true, root, url: `http://${d.slug}.${domain}` });
+  return c.json({ ok: true, root, url: siteUrl(d.slug) });
+});
+
+// Serve published sites path-based so they're reachable on a plain laptop
+// (no Caddy / wildcard DNS). {slug} → SITES_DIR/{slug}/{path or index.html}.
+app.get("/sites/:slug", (c) => c.redirect(`/sites/${c.req.param("slug")}/`));
+app.get("/sites/:slug/*", async (c) => {
+  const slug = c.req.param("slug");
+  if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(slug)) return c.text("not found", 404);
+  let rel = c.req.path.slice(`/sites/${slug}/`.length);
+  if (rel === "" || rel.endsWith("/")) rel += "index.html";
+  if (rel.includes("..")) return c.text("bad path", 400);
+  try {
+    const data = await readFile(join(sitesDir(), slug, rel));
+    return new Response(data, {
+      headers: { "content-type": MIME[extname(rel).toLowerCase()] ?? "application/octet-stream" },
+    });
+  } catch {
+    return c.text("not found", 404);
+  }
 });
 
 // raw file deploy (used by worker agents in M2+ via web-mcp deploy_site)

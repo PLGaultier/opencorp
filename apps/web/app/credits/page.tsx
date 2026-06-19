@@ -17,8 +17,11 @@ interface CreditEntry {
 
 interface CreditData {
   conglomerateId: string;
-  balance: number;
+  balance: number; // cents — real money, burned at real API cost (§10 pillar 1)
+  burnCentsPerDay: number;
+  runwayDays: number | null;
   breakdown: Record<string, number>;
+  connectAccountId: string | null;
   subscription: { plan: string; status: string; currentPeriodStart: string | null } | null;
   entries: CreditEntry[];
 }
@@ -54,6 +57,9 @@ export default function CreditsPage() {
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const [subError, setSubError] = useState<string | null>(null);
   const [subDone, setSubDone] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [connectMsg, setConnectMsg] = useState<string | null>(null);
+  const [toppingUp, setToppingUp] = useState<number | null>(null);
 
   useEffect(() => {
     if (!API_URL || isPending || !session) { setLoading(false); return; }
@@ -92,12 +98,15 @@ export default function CreditsPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ plan: planId }),
       });
+      const d = (await res.json()) as { error?: string; checkoutUrl?: string };
       if (!res.ok) {
-        const d = (await res.json()) as { error?: string };
         setSubError(d.error ?? "subscription failed");
+      } else if (d.checkoutUrl) {
+        window.location.href = d.checkoutUrl; // Stripe Checkout (paid plan)
+        return;
       } else {
         setSubDone(planId);
-        // reload credit data
+        // reload credit data (local mode grants immediately)
         const credRes = await fetch(`${API_URL}/api/conglomerates/${data.conglomerateId}/credits`, { credentials: "include" });
         if (credRes.ok) setData(await credRes.json() as CreditData);
       }
@@ -105,6 +114,57 @@ export default function CreditsPage() {
       setSubError("API unreachable");
     }
     setSubscribing(null);
+  };
+
+  const topUp = async (amountCents: number) => {
+    if (!data) return;
+    setToppingUp(amountCents);
+    try {
+      const res = await fetch(`${API_URL}/api/conglomerates/${data.conglomerateId}/topup`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amountCents }),
+      });
+      const d = (await res.json()) as { url?: string };
+      if (d.url) window.location.href = d.url; // Stripe Checkout or local checkout page
+      else setToppingUp(null);
+    } catch {
+      setToppingUp(null);
+    }
+  };
+
+  const connectBank = async () => {
+    if (!data) return;
+    setConnecting(true);
+    setConnectMsg(null);
+    try {
+      const res = await fetch(`${API_URL}/api/conglomerates/${data.conglomerateId}/connect/onboard`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        // Stripe sends the owner back here after finishing / to retry.
+        body: JSON.stringify({ returnUrl: window.location.href }),
+      });
+      const d = (await res.json()) as {
+        mode?: string;
+        onboardingUrl?: string | null;
+        message?: string;
+        error?: string;
+      };
+      if (!res.ok) {
+        setConnectMsg(d.message ?? d.error ?? "Couldn't start onboarding.");
+      } else if (d.mode === "stripe" && d.onboardingUrl) {
+        window.location.href = d.onboardingUrl; // hand off to Stripe-hosted KYC
+      } else {
+        // Local mode (no platform Stripe key) — Connect is off; payouts use the
+        // local rail. Surface the gateway's explanation instead of redirecting.
+        setConnectMsg(d.message ?? "Stripe Connect is not enabled on this instance.");
+      }
+    } catch {
+      setConnectMsg("API unreachable");
+    }
+    setConnecting(false);
   };
 
   // ── Demo / unauthenticated states ──────────────────────────────────────────
@@ -152,36 +212,88 @@ export default function CreditsPage() {
   const currentPlan = data.subscription?.plan ?? "free";
   const charged = Math.abs(data.breakdown["task_charge"] ?? 0);
   const refunded = data.breakdown["task_refund"] ?? 0;
-  const granted = (data.breakdown["grant"] ?? 0) + (data.breakdown["referral"] ?? 0) + Math.max(0, data.breakdown["adjustment"] ?? 0);
+
+  const runwayLabel =
+    data.runwayDays === null
+      ? "—"
+      : data.runwayDays >= 365
+        ? "1y+"
+        : `~${Math.max(0, Math.round(data.runwayDays))}d`;
 
   return (
     <main>
-      <h1>Credits</h1>
-      <p className="sub">Your conglomerate credit balance — every grant and charge is on the ledger.</p>
+      <h1>Balance</h1>
+      <p className="sub">
+        Your conglomerate wallet is real money, burned at the true API cost of each task — every
+        grant, charge and refund is on the ledger.
+      </p>
 
-      {/* Balance + breakdown */}
+      {/* Balance + breakdown (all in euros) */}
       <div className="pnl">
         <div>
           <span>Balance</span>
-          <b className={data.balance > 0 ? "pos" : ""}>{data.balance.toFixed(2)}</b>
+          <b className={data.balance > 0 ? "pos" : ""}>{eur(data.balance)}</b>
         </div>
         <div>
-          <span>Total granted</span>
-          <b>{granted.toFixed(2)}</b>
+          <span>Runway</span>
+          <b>{runwayLabel}</b>
         </div>
         <div>
-          <span>Task charges</span>
-          <b>{charged.toFixed(2)}</b>
+          <span>Burn / day</span>
+          <b>{eur(data.burnCentsPerDay)}</b>
         </div>
         <div>
-          <span>Refunds</span>
-          <b className="pos">{refunded.toFixed(2)}</b>
+          <span>Spent on API</span>
+          <b>{eur(charged - refunded)}</b>
         </div>
         <div>
           <span>Plan</span>
           <b style={{ textTransform: "capitalize" }}>{currentPlan}</b>
         </div>
       </div>
+
+      {/* Top up — add real money to the wallet (§10 pillar 1, Stage 2) */}
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Top up wallet</h2>
+        <p className="sub" style={{ marginTop: "0.25rem" }}>
+          Add funds to keep your companies running. The wallet is spent at the real API cost of
+          each task.
+        </p>
+        <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.75rem", flexWrap: "wrap" }}>
+          {[1000, 2500, 10000].map((cents) => (
+            <button
+              key={cents}
+              className="btn primary"
+              onClick={() => topUp(cents)}
+              disabled={toppingUp !== null}
+            >
+              {toppingUp === cents ? "…" : `Add ${eur(cents)}`}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Payouts — one Stripe Connect account per conglomerate */}
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Payouts</h2>
+        <p className="sub" style={{ marginTop: "0.25rem" }}>
+          Connect a bank account to withdraw your companies&apos; revenue. One account
+          covers every company in your conglomerate — Stripe handles identity verification.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.75rem" }}>
+          <button className="btn primary" onClick={connectBank} disabled={connecting}>
+            {connecting
+              ? "…"
+              : data.connectAccountId
+                ? "Manage payout account"
+                : "Connect your bank"}
+          </button>
+          {data.connectAccountId && (
+            <span className="saved" style={{ margin: 0 }}>Bank linked ✓</span>
+          )}
+        </div>
+        {connectMsg && <p className="sub" style={{ marginTop: "0.5rem" }}>{connectMsg}</p>}
+      </section>
 
       {/* Plans */}
       {plans.length > 0 && (
@@ -198,7 +310,7 @@ export default function CreditsPage() {
                     {p.priceCents === 0 ? "Free" : `${eur(p.priceCents)}${p.oneTime ? "" : "/mo"}`}
                   </span>
                   <span className="sub" style={{ margin: 0 }}>
-                    {p.credits} credits{p.oneTime ? " (one-time)" : "/month"}
+                    {eur(p.credits)} of API usage{p.oneTime ? " (one-time)" : "/month"}
                   </span>
                   {active ? (
                     <span className="saved" style={{ marginTop: "0.5rem" }}>Current plan ✓</span>
@@ -276,6 +388,15 @@ function DemoCreditView() {
         <div><span>Task charges</span><b>1.00</b></div>
         <div><span>Plan</span><b>Free</b></div>
       </div>
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Payouts</h2>
+        <p className="sub" style={{ marginTop: "0.25rem" }}>
+          Connect a bank account to withdraw revenue — one account per conglomerate.
+        </p>
+        <button className="btn primary" style={{ marginTop: "0.75rem" }} disabled>
+          Connect your bank
+        </button>
+      </section>
       <section style={{ marginTop: "2rem" }}>
         <h2 style={{ fontSize: "1.05rem" }}>Plans</h2>
         <div className="plan-grid">

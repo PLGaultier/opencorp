@@ -16,20 +16,32 @@ import { spawn, type ChildProcess } from "node:child_process";
 const ROOT = new URL("..", import.meta.url).pathname;
 const COMPOSE = ["docker", "compose", "-f", "infra/compose/docker-compose.mvp.yml"];
 const HAS_LLM = !!process.env.ANTHROPIC_API_KEY || !!process.env.OPENAI_API_KEY;
+// GitHub OAuth configured → use real login; otherwise frictionless single dev owner.
+const HAS_GITHUB = !!process.env.GITHUB_CLIENT_ID && !!process.env.GITHUB_CLIENT_SECRET;
+const AUTH_DISABLED = process.env.OPENCORP_AUTH_DISABLED ?? (HAS_GITHUB ? "0" : "1");
+
+const API_URL = "http://localhost:3001";
+const DEPLOYD_URL = process.env.DEPLOYD_URL ?? "http://localhost:3002";
 
 const env = {
   ...process.env,
   DATABASE_URL: process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp",
   TEMPORAL_ADDRESS: process.env.TEMPORAL_ADDRESS ?? "localhost:7233",
   GATEWAY_URL: process.env.GATEWAY_URL ?? "http://localhost:3004",
-  DEPLOYD_URL: process.env.DEPLOYD_URL ?? "http://localhost:3002",
+  DEPLOYD_URL,
   GATEWAY_SECRET: process.env.GATEWAY_SECRET ?? "dev-gateway-secret",
   SANDBOX_KIND: process.env.SANDBOX_KIND ?? "local",
   // deployd serves company sites from here (host dir, not the container's /srv).
   SITES_DIR: process.env.SITES_DIR ?? `${ROOT}.opencorp/sites`,
-  // Local MVP: no signup friction. The dashboard + API act as a single dev
-  // owner. NEVER expose this build publicly with auth disabled.
-  OPENCORP_AUTH_DISABLED: process.env.OPENCORP_AUTH_DISABLED ?? "1",
+  // Local MVP: with no GitHub creds, the dashboard + API act as a single dev
+  // owner (no signup). NEVER expose an auth-disabled build publicly.
+  OPENCORP_AUTH_DISABLED: AUTH_DISABLED,
+  // Web (Next.js) needs these at the client: point it at the real API + the
+  // local site host, and mirror the auth mode so the UI matches the API.
+  NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL ?? API_URL,
+  NEXT_PUBLIC_DEPLOYD_URL: process.env.NEXT_PUBLIC_DEPLOYD_URL ?? DEPLOYD_URL,
+  NEXT_PUBLIC_AUTH_DISABLED: AUTH_DISABLED,
+  ...(HAS_GITHUB ? { NEXT_PUBLIC_AUTH_GITHUB: "1" } : {}),
   ...(HAS_LLM ? { LITELLM_URL: process.env.LITELLM_URL ?? "http://localhost:4000" } : {}),
 };
 
@@ -150,6 +162,7 @@ async function main() {
       `   dashboard   http://localhost:3000\n` +
       `   API         http://localhost:3001\n` +
       `   Temporal UI http://localhost:8233\n` +
+      `   auth        ${HAS_GITHUB ? "GitHub OAuth" : "disabled (single local dev owner)"}\n` +
       (HAS_LLM ? "" : `   ⚠ offline mode: add ANTHROPIC_API_KEY to .env for real AI\n`) +
       `\n   Create a company from the dashboard, or:\n` +
       `   curl -XPOST localhost:3001/companies -H 'content-type: application/json' -d '{"prompt":"a tiny SaaS that…"}'\n`,

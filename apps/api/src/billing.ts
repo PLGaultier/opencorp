@@ -16,14 +16,16 @@ export interface Plan {
   id: PlanId;
   name: string;
   priceCents: number; // monthly, EUR
-  credits: number; // per cycle (one-time for free)
+  credits: number; // §10 pillar 1: monthly wallet allowance in CENTS, burned at real API cost
   oneTime: boolean;
 }
 
+// The allowance (cents) is worth less than the price — the gap is the
+// subscription's gross margin; the platform's other pillar is the withdrawal fee.
 export const PLANS: Record<PlanId, Plan> = {
-  free: { id: "free", name: "Free", priceCents: 0, credits: 10, oneTime: true },
-  builder: { id: "builder", name: "Builder", priceCents: 2900, credits: 100, oneTime: false },
-  pro: { id: "pro", name: "Pro", priceCents: 9900, credits: 500, oneTime: false },
+  free: { id: "free", name: "Free", priceCents: 0, credits: 200, oneTime: true },
+  builder: { id: "builder", name: "Builder", priceCents: 2900, credits: 2000, oneTime: false },
+  pro: { id: "pro", name: "Pro", priceCents: 9900, credits: 8000, oneTime: false },
 };
 
 export interface SubscriptionRow {

@@ -5,13 +5,19 @@
  * spent, money withdrawn, current balance — every number on the public ledger.
  */
 
+/** The CEO "brains" ladder (§10): cheaper → pricier model bundle. */
+export type ModelLevel = "intern" | "grad" | "phd";
+
 export interface Company {
   id: string;
   slug: string;
   name: string;
   mission: string;
   status: "active" | "paused";
-  creditsSpent: number;
+  /** The CEO "brains" level — which model bundle powers the agents (§10). */
+  modelLevel: ModelLevel;
+  /** Real money spent on operations (LLM/API cost), in cents — §10 pillar 1. */
+  spendCents: number;
   revenueCents: number;
   moneyOutCents: number;
   balanceCents: number;
@@ -20,6 +26,7 @@ export interface Company {
   dailyTaskCap: number;
   autonomyLevel: "supervised" | "bounded" | "full";
   isPublic: boolean;
+  adMonthlyBudgetCapCents: number;
   emailAddress?: string | null;
 }
 
@@ -96,6 +103,19 @@ export interface Payment {
   createdAt: string;
 }
 
+/** An ad campaign with this-month spend, attributed revenue and ROAS (§14). */
+export interface Campaign {
+  id: string;
+  name: string;
+  objective: string;
+  status: "paused" | "active" | "archived";
+  budgetCents: number;
+  budgetType: string;
+  spendCents: number;
+  revenueCents: number;
+  roas: number | null;
+}
+
 export interface RevenueSummary {
   grossCents: number;
   feesCents: number;
@@ -116,6 +136,14 @@ export interface Email {
   createdAt: string;
 }
 
+/** Privacy-light website analytics for a company site (last 30 days). */
+export interface SiteAnalytics {
+  pageviews: number;
+  visitors: number;
+  sessions: number;
+  peakPerDay: number;
+}
+
 /** Raw ledger event for the company terminal — full (redacted) payload. */
 export interface TerminalEvent {
   seq: number;
@@ -128,6 +156,18 @@ export interface TerminalEvent {
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 export const isDemo = !API_URL;
 
+/** Local MVP frictionless mode (API injects a single dev owner). */
+export const AUTH_DISABLED = process.env.NEXT_PUBLIC_AUTH_DISABLED === "1";
+/** Whether the GitHub social-login button should be shown. */
+export const GITHUB_ENABLED = process.env.NEXT_PUBLIC_AUTH_GITHUB === "1";
+/** Base URL where deployd serves published company sites (path-based, local). */
+const DEPLOYD_URL = process.env.NEXT_PUBLIC_DEPLOYD_URL ?? "";
+
+/** Public URL of a company's website — local deployd path, else prod subdomain. */
+export function siteUrl(slug: string): string {
+  return DEPLOYD_URL ? `${DEPLOYD_URL.replace(/\/$/, "")}/sites/${slug}/` : `http://${slug}.opencorp.app`;
+}
+
 export const demoCompanies: Company[] = [
   {
     id: "e4e62166-f974-44fe-842e-8f38e2610832",
@@ -135,7 +175,8 @@ export const demoCompanies: Company[] = [
     name: "Sell Handmade Ceramic",
     mission: "Build and grow a business around: sell handmade ceramic mugs online to coffee lovers",
     status: "active",
-    creditsSpent: 2.4,
+    modelLevel: "grad",
+    spendCents: 240,
     revenueCents: 5800,
     moneyOutCents: 2900,
     balanceCents: 2900,
@@ -144,6 +185,7 @@ export const demoCompanies: Company[] = [
     dailyTaskCap: 3,
     autonomyLevel: "supervised",
     isPublic: true,
+    adMonthlyBudgetCapCents: 0,
   },
   {
     id: "b220b359-37fa-4877-b217-7b20c83289b2",
@@ -151,7 +193,8 @@ export const demoCompanies: Company[] = [
     name: "A Newsletter About",
     mission: "Build and grow a business around: a newsletter about vintage synthesizers for collectors",
     status: "active",
-    creditsSpent: 1.1,
+    modelLevel: "intern",
+    spendCents: 110,
     revenueCents: 2900,
     moneyOutCents: 0,
     balanceCents: 2900,
@@ -160,6 +203,7 @@ export const demoCompanies: Company[] = [
     dailyTaskCap: 3,
     autonomyLevel: "supervised",
     isPublic: true,
+    adMonthlyBudgetCapCents: 0,
   },
 ];
 
@@ -225,6 +269,13 @@ export const demoProducts: Record<string, Product[]> = {
   ],
 };
 
+export const demoCampaigns: Record<string, Campaign[]> = {
+  "sell-handmade-ceramic": [
+    { id: "ac1", name: "Mugs — summer push", objective: "OUTCOME_SALES", status: "active", budgetCents: 3000, budgetType: "daily", spendCents: 1800, revenueCents: 5800, roas: 3.22 },
+    { id: "ac2", name: "Mugs — broad awareness", objective: "OUTCOME_AWARENESS", status: "paused", budgetCents: 1000, budgetType: "daily", spendCents: 1600, revenueCents: 0, roas: 0 },
+  ],
+};
+
 export const demoPayments: Record<string, { summary: RevenueSummary; payments: Payment[] }> = {
   "sell-handmade-ceramic": {
     summary: { grossCents: 5800, feesCents: 203, netCents: 5597, count: 2 },
@@ -282,9 +333,10 @@ export const demoLedger: LedgerEvent[] = [
 
 interface ApiCompany {
   id: string; slug: string; name: string; mission: string; status: Company["status"];
-  revenueCents: number; creditsSpent: number; moneyOutCents: number; balanceCents: number;
+  revenueCents: number; spendCents: number; moneyOutCents: number; balanceCents: number;
   tasksDone: number; tasksQueued: number;
-  dailyTaskCap: number; autonomyLevel: Company["autonomyLevel"]; isPublic: boolean;
+  dailyTaskCap: number; autonomyLevel: Company["autonomyLevel"]; modelLevel: ModelLevel; isPublic: boolean;
+  adMonthlyBudgetCapCents: number; emailAddress?: string | null;
 }
 
 export async function getCompanies(): Promise<Company[]> {
@@ -295,6 +347,23 @@ export async function getCompanies(): Promise<Company[]> {
     return companies;
   } catch {
     return demoCompanies;
+  }
+}
+
+/**
+ * The signed-in owner's own companies. Client-only — it sends the Better Auth
+ * session cookie (credentials: "include"). Returns [] when signed out (401),
+ * in demo mode, or if the API is unreachable.
+ */
+export async function getMyCompanies(): Promise<Company[]> {
+  if (!API_URL) return [];
+  try {
+    const res = await fetch(`${API_URL}/api/companies/mine`, { credentials: "include" });
+    if (!res.ok) return [];
+    const { companies } = (await res.json()) as { companies: Company[] };
+    return companies;
+  } catch {
+    return [];
   }
 }
 
@@ -414,6 +483,18 @@ export async function getPayments(
   }
 }
 
+export async function getCampaigns(slug: string): Promise<Campaign[]> {
+  if (!API_URL) return demoCampaigns[slug] ?? [];
+  try {
+    const res = await fetch(`${API_URL}/api/companies/${slug}/campaigns`, { next: { revalidate: 30 } });
+    if (!res.ok) return [];
+    const { campaigns } = (await res.json()) as { campaigns: Campaign[] };
+    return campaigns;
+  } catch {
+    return [];
+  }
+}
+
 export async function getEmails(slug: string, direction?: "in" | "out"): Promise<Email[]> {
   if (!API_URL) {
     const all = demoEmails[slug] ?? [];
@@ -430,6 +511,25 @@ export async function getEmails(slug: string, direction?: "in" | "out"): Promise
   }
 }
 
+// Demo website analytics so the per-company Analytics panel stands alone in the
+// Vercel preview; real numbers come from the site's analytics endpoint later.
+const demoAnalytics: Record<string, SiteAnalytics> = {
+  "sell-handmade-ceramic": { pageviews: 142, visitors: 61, sessions: 88, peakPerDay: 19 },
+  "a-newsletter-about": { pageviews: 16, visitors: 8, sessions: 16, peakPerDay: 7 },
+};
+
+export async function getAnalytics(slug: string): Promise<SiteAnalytics> {
+  const empty: SiteAnalytics = { pageviews: 0, visitors: 0, sessions: 0, peakPerDay: 0 };
+  if (!API_URL) return demoAnalytics[slug] ?? empty;
+  try {
+    const res = await fetch(`${API_URL}/api/companies/${slug}/analytics`, { next: { revalidate: 60 } });
+    if (!res.ok) return empty;
+    return (await res.json()) as SiteAnalytics;
+  } catch {
+    return empty;
+  }
+}
+
 export async function getEmail(slug: string, emailId: string): Promise<Email | null> {
   if (!API_URL) return demoEmails[slug]?.find((e) => e.id === emailId) ?? null;
   try {
@@ -442,22 +542,39 @@ export async function getEmail(slug: string, emailId: string): Promise<Email | n
   }
 }
 
+/** A raw (redacted) ledger row as returned by /api/ledger and /api/live. */
+export interface RawLedgerEvent {
+  seq: number;
+  companyId: string | null;
+  actor: string;
+  eventType: string;
+  payload: unknown;
+  hash: string;
+  createdAt: string;
+}
+
+/**
+ * Map a raw ledger row into a display LedgerEvent. Shared by the snapshot fetch
+ * and the live SSE stream so both surfaces render identical lines.
+ */
+export function toLedgerEvent(e: RawLedgerEvent): LedgerEvent {
+  return {
+    seq: e.seq,
+    companySlug: e.companyId,
+    actor: e.actor,
+    eventType: e.eventType,
+    summary: JSON.stringify(e.payload).slice(0, 120),
+    hash: e.hash.slice(0, 12),
+    createdAt: e.createdAt,
+  };
+}
+
 export async function getLedger(): Promise<LedgerEvent[]> {
   if (!API_URL) return demoLedger;
   try {
     const res = await fetch(`${API_URL}/api/ledger?limit=50`, { next: { revalidate: 5 } });
-    const { events } = (await res.json()) as { events: { seq: number; companyId: string | null; actor: string; eventType: string; payload: unknown; hash: string; createdAt: string }[] };
-    return events
-      .map((e) => ({
-        seq: e.seq,
-        companySlug: e.companyId,
-        actor: e.actor,
-        eventType: e.eventType,
-        summary: JSON.stringify(e.payload).slice(0, 120),
-        hash: e.hash.slice(0, 12),
-        createdAt: e.createdAt,
-      }))
-      .reverse();
+    const { events } = (await res.json()) as { events: RawLedgerEvent[] };
+    return events.map(toLedgerEvent).reverse();
   } catch {
     return demoLedger;
   }

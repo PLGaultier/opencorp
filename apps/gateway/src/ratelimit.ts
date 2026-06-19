@@ -18,6 +18,11 @@ export const DEFAULT_LIMITS: Record<string, ToolLimits> = {
   delete_product: { hour: 5, day: 20 },
   set_custom_domain: { hour: 2, day: 5 },
   submit_form: { hour: 10, day: 50 },
+  // ads-mcp (§14): money-out tools kept tight so a loop can't thrash budgets.
+  create_campaign: { hour: 5, day: 20 },
+  set_budget: { hour: 5, day: 20 },
+  launch_campaign: { hour: 5, day: 20 },
+  pause_campaign: { hour: 20, day: 100 },
   create_document: { hour: 30, day: 200 },
   update_document: { hour: 30, day: 200 },
   set_env_vars: { hour: 30, day: 150 },

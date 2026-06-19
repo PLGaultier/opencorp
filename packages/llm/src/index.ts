@@ -1,4 +1,6 @@
 export * from "./client";
+export * from "./levels";
+export * from "./pricing";
 export * from "./companySpec";
 export * from "./trace";
 export * from "./ceo";

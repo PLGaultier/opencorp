@@ -1,0 +1,42 @@
+# Production edge (§12). Automatic TLS via Let's Encrypt. SITE_DOMAIN is your
+# apex (e.g. opencorp.app); assumed to be 2 labels — see the {labels.2} note below.
+{
+	email {$ACME_EMAIL}
+	# Per-subdomain certs are issued on first request for company sites. The `ask`
+	# endpoint authorizes which hostnames may get a cert (prevents abuse): deployd
+	# returns 200 only for a slug that has actually been published.
+	on_demand_tls {
+		ask http://deployd:3002/exists
+	}
+}
+
+# Control-plane services (fixed hostnames → normal automatic TLS).
+api.{$SITE_DOMAIN} {
+	reverse_proxy api:3001
+}
+
+# The gateway and LLM must be publicly reachable when SANDBOX_KIND=e2b (the
+# cloud sandbox calls them). They're auth-gated (signed tokens / LiteLLM key).
+gw.{$SITE_DOMAIN} {
+	reverse_proxy gateway:3004
+}
+llm.{$SITE_DOMAIN} {
+	reverse_proxy litellm:4000
+}
+
+# Company sites: {slug}.{SITE_DOMAIN} → static files deployd wrote to the shared
+# volume. {labels.2} is the leftmost label when SITE_DOMAIN has 2 labels
+# (acme.opencorp.app → app=0, opencorp=1, acme=2). Adjust if your apex differs.
+*.{$SITE_DOMAIN} {
+	tls {
+		on_demand
+	}
+	root * /srv/sites/{labels.2}
+	file_server
+	encode gzip
+}
+
+# Apex → send visitors to the dashboard (the Next.js app on Vercel).
+{$SITE_DOMAIN} {
+	redir https://app.{$SITE_DOMAIN}{uri}
+}

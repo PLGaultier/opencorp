@@ -1,0 +1,1 @@
+ALTER TABLE "conglomerates" ADD COLUMN "stripe_connect_account_id" text;

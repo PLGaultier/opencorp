@@ -1,0 +1,13 @@
+# Temporal worker: runs on Node via tsx (the Temporal TS SDK is not Bun-compatible).
+# Bun is installed only to resolve the workspace from bun.lock; `bun run worker`
+# invokes `tsx src/worker.ts`, which executes under Node (tsx has a node shebang).
+FROM node:22-bookworm-slim
+
+RUN npm install -g bun
+
+WORKDIR /app
+COPY . .
+RUN bun install --frozen-lockfile
+
+ENV NODE_ENV=production
+CMD ["bun", "run", "--cwd", "workflows", "worker"]

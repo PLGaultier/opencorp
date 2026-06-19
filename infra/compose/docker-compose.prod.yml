@@ -1,0 +1,107 @@
+name: opencorp-prod
+
+# Single-VPS production stack. The web app (Next.js) stays on Vercel; everything
+# else runs here behind Caddy. Bring up with:
+#   docker compose -f infra/compose/docker-compose.prod.yml --env-file .env.prod up -d --build
+# See DEPLOY.md for the full runbook (DNS, secrets, E2B, Stripe).
+
+x-app-build: &app-build
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  env_file: ../../.env.prod
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-opencorp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a strong POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-opencorp}
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opencorp}"]
+      interval: 5s
+      retries: 20
+
+  temporal:
+    image: temporalio/auto-setup:1.26
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER:-opencorp}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_SEEDS: postgres
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-}
+    volumes: ["./litellm.config.yaml:/etc/litellm/config.yaml:ro"]
+    restart: unless-stopped
+
+  # One-shot DB migration; app services wait for it to complete.
+  migrate:
+    <<: *app-build
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    command: ["bun", "run", "db:migrate"]
+
+  api:
+    <<: *app-build
+    command: ["bun", "apps/api/src/index.ts"]
+    environment: { PORT: "3001" }
+
+  gateway:
+    <<: *app-build
+    command: ["bun", "apps/gateway/src/index.ts"]
+    environment: { PORT: "3004" }
+
+  deployd:
+    <<: *app-build
+    command: ["bun", "services/deployd/src/server.ts"]
+    environment: { PORT: "3002" }
+    volumes: ["sites:/srv/sites"]
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.worker
+    env_file: ../../.env.prod
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - sites:/srv/sites:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?set your apex domain, e.g. opencorp.app}
+      ACME_EMAIL: ${ACME_EMAIL:?set an email for Let's Encrypt}
+    depends_on: [api, gateway, deployd]
+
+volumes:
+  pgdata:
+  sites:
+  caddy_data:
+  caddy_config:

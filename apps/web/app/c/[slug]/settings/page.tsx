@@ -26,6 +26,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
           dailyTaskCap: company.dailyTaskCap,
           autonomyLevel: company.autonomyLevel,
           isPublic: company.isPublic,
+          adMonthlyBudgetCapCents: company.adMonthlyBudgetCapCents,
         }}
       />
     </main>

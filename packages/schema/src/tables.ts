@@ -12,6 +12,7 @@ import {
   bigserial,
   customType,
   index,
+  uniqueIndex,
   vector,
 } from "drizzle-orm/pg-core";
 
@@ -27,6 +28,13 @@ export const autonomyLevel = pgEnum("autonomy_level", ["supervised", "bounded", 
 // "department" = persistent sub-planners (CMO/CTO/CFO, §14 M5); name carries the role
 export const agentKind = pgEnum("agent_kind", ["ceo", "worker", "department"]);
 export const modelTier = pgEnum("model_tier", ["frontier", "standard", "mini"]);
+// The CEO's "brains" (§10): which model bundle powers this company's agents. A
+// playful ladder — intern (cheapest, Haiku-biased) → grad (default, Sonnet) →
+// phd (priciest, Opus-biased). Higher levels spend more per task.
+export const modelLevel = pgEnum("model_level", ["intern", "grad", "phd"]);
+// Ad campaign lifecycle (§14). Created `paused` (no spend), `active` once
+// launched, `paused` again on owner pause or auto-pause at the budget cap.
+export const adCampaignStatus = pgEnum("ad_campaign_status", ["paused", "active", "archived"]);
 export const taskStatus = pgEnum("task_status", [
   "pending",
   "queued",
@@ -113,6 +121,16 @@ export const conglomerates = pgTable("conglomerates", {
   ownerUserId: text("owner_user_id").notNull(),
   name: text("name").notNull(),
   dailyCreditCap: numeric("daily_credit_cap").notNull().default("10"),
+  // Stripe Connect (§10): one connected account per conglomerate (per owner) —
+  // KYC + the payout bank account live on the human, not on the AI companies
+  // (which aren't legal entities). Per-company revenue is split in our ledger,
+  // not in Stripe. Null until the owner completes Connect Express onboarding.
+  stripeConnectAccountId: text("stripe_connect_account_id"),
+  // Meta Ads (§14): one ad account per conglomerate (same rationale as Connect
+  // — Meta bills the owner's payment method, not our Stripe). Campaigns are
+  // attributed per company; spend caps are enforced per company in our ledger.
+  // The META_ACCESS_TOKEN is a secret and lives in the vault, not here.
+  metaAdAccountId: text("meta_ad_account_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -143,6 +161,12 @@ export const companies = pgTable("companies", {
   umamiSiteId: text("umami_site_id"),
   realBalanceCents: bigint("real_balance_cents", { mode: "number" }).notNull().default(0),
   autonomyLevel: autonomyLevel("autonomy_level").notNull().default("supervised"),
+  // §10: the model bundle powering this company's agents (see modelLevel enum).
+  modelLevel: modelLevel("model_level").notNull().default("grad"),
+  // Ads (§14): owner-set ceiling on ad spend per calendar month. 0 = ads off.
+  // Under `bounded` autonomy the agent may launch/budget campaigns up to this
+  // cap without approval; beyond it the action parks for the owner (§7.3).
+  adMonthlyBudgetCapCents: bigint("ad_monthly_budget_cap_cents", { mode: "number" }).notNull().default(0),
   isPublic: boolean("is_public").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -262,6 +286,10 @@ export const products = pgTable("products", {
   priceCents: bigint("price_cents", { mode: "number" }).notNull(),
   currency: text("currency").notNull().default("eur"),
   providerRef: text("provider_ref"),
+  // Customer-facing checkout URL. For Stripe this is the buy.stripe.com link
+  // (not reconstructable from the id); for local mode it's the deterministic
+  // gateway /checkout link. Stored so get_payment_link returns the real link.
+  paymentLink: text("payment_link"),
 });
 
 export const payments = pgTable("payments", {
@@ -270,6 +298,9 @@ export const payments = pgTable("payments", {
     .notNull()
     .references(() => companies.id),
   productId: uuid("product_id").references(() => products.id),
+  // Ad campaign that drove this sale (§14 ROAS attribution), via the ?c= tag on
+  // the ad creative's checkout link. Null = organic / unattributed.
+  campaignId: uuid("campaign_id").references(() => adCampaigns.id),
   amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
   currency: text("currency").notNull(),
   providerRef: text("provider_ref"),
@@ -277,6 +308,51 @@ export const payments = pgTable("payments", {
   netCents: bigint("net_cents", { mode: "number" }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ── Ads (§14): budgeted Meta/Google campaigns ──────────────────────────────
+// A campaign advertises a product. `provider` is 'meta' when the conglomerate
+// has connected an ad account, else 'local' (offline mock). `budgetCents` is
+// the campaign's own Meta-side budget; the owner's monthly ceiling lives on the
+// company. Spend is mirrored from the provider's insights into `ad_spend`.
+export const adCampaigns = pgTable("ad_campaigns", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id")
+    .notNull()
+    .references(() => companies.id),
+  productId: uuid("product_id").references(() => products.id),
+  provider: text("provider").notNull(), // 'meta' | 'local'
+  providerRef: text("provider_ref"), // external campaign id (act_…/campaign id)
+  name: text("name").notNull(),
+  objective: text("objective").notNull(), // e.g. OUTCOME_SALES / OUTCOME_TRAFFIC
+  status: adCampaignStatus("status").notNull().default("paused"),
+  budgetCents: bigint("budget_cents", { mode: "number" }).notNull(),
+  budgetType: text("budget_type").notNull().default("daily"), // 'daily' | 'lifetime'
+  creative: jsonb("creative"), // { headline, body, imageUrl?, linkUrl }
+  launchedAt: timestamp("launched_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Daily spend per campaign, mirrored from provider insights. Unique on
+// (campaign_id, day) so the spend-sync upsert is idempotent under retries; the
+// monthly cap is SUM(spend_cents) where day >= date_trunc('month', now()).
+export const adSpend = pgTable(
+  "ad_spend",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id),
+    campaignId: uuid("campaign_id")
+      .notNull()
+      .references(() => adCampaigns.id),
+    day: text("day").notNull(), // YYYY-MM-DD (account timezone)
+    spendCents: bigint("spend_cents", { mode: "number" }).notNull().default(0),
+    impressions: bigint("impressions", { mode: "number" }).notNull().default(0),
+    clicks: bigint("clicks", { mode: "number" }).notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ campaignDay: uniqueIndex("ad_spend_campaign_day_uq").on(t.campaignId, t.day) }),
+);
 
 // ── Billing plans (§10): one subscription per conglomerate ─────────────────
 // Credits remain the source of truth in credit_entries; Lago (when configured)
