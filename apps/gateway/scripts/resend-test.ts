@@ -52,7 +52,9 @@ async function main() {
   const secrets = secretStoreFromEnv();
   const provider = await emailFor(company.id, secrets, company.email_address);
   console.log(`  transport: ${provider.kind}`);
-  if (provider.kind !== "resend") {
+  // "composite" = Resend out + Stalwart in (the real prospecting setup); it still
+  // sends externally via Resend. Only local/stalwart-only won't reach an inbox.
+  if (provider.kind !== "resend" && provider.kind !== "composite") {
     console.warn("  ⚠ transport is not 'resend' — the mail will NOT reach an external inbox.");
   }
 

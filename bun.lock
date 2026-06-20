@@ -16,6 +16,7 @@
         "@opencorp/ledgerd": "workspace:*",
         "@opencorp/llm": "workspace:*",
         "@opencorp/schema": "workspace:*",
+        "@opencorp/stalwart": "workspace:*",
         "@opencorp/workflows": "workspace:*",
         "better-auth": "^1.6.16",
         "drizzle-orm": "^0.45.2",

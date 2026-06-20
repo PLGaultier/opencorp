@@ -6,6 +6,7 @@ import { z } from "zod";
 import postgres from "postgres";
 import { Ledger, PgStore } from "@opencorp/ledgerd";
 import { ceoChat, llmConfigFromEnv, publicTraceUrl, traceConfigFromEnv, tracerFromEnv } from "@opencorp/llm";
+import { syncInboxFromEnv } from "@opencorp/stalwart";
 import {
   applyCeoPlan,
   backfillHeartbeatSchedules,
@@ -638,6 +639,10 @@ app.get("/api/companies/:slug/campaigns", async (c) => {
 app.get("/api/companies/:slug/emails", async (c) => {
   const companyId = await publicCompanyId(c.req.param("slug"));
   if (!companyId) return c.json({ error: "not_found" }, 404);
+  // Best-effort: pull any new replies from Stalwart into the mirror before
+  // reading, so the dashboard inbox is live (no-op when mail is unconfigured or
+  // the company isn't on the platform domain). Never blocks the read on failure.
+  await syncInboxFromEnv(sql, ledger, companyId).catch(() => {});
   const direction = c.req.query("direction");
   const rows = await sql<
     { id: string; direction: string; from_addr: string; to_addrs: string[]; subject: string; read: boolean; created_at: string }[]

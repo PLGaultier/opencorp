@@ -20,6 +20,9 @@ const UMAMI_URL = process.env.UMAMI_URL;
 const UMAMI_TOKEN = process.env.UMAMI_TOKEN;
 const DEPLOYD_URL = process.env.DEPLOYD_URL ?? "http://localhost:3002";
 const DOMAIN = process.env.OPENCORP_DOMAIN ?? "localhost";
+// Mail lives on its own (sub)domain (Resend-verified + Stalwart MX); fall back to
+// the apex only when unset. provisionMailbox re-asserts this, but seed it right.
+const MAIL_DOMAIN = process.env.MAIL_DOMAIN ?? DOMAIN;
 // The gateway serves the local checkout page; starter payment links point here.
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3004";
 const CHECKOUT_BASE = process.env.CHECKOUT_BASE_URL ?? `${GATEWAY_URL}/checkout`;
@@ -39,7 +42,7 @@ export async function upsertCompany(input: {
   const [row] = await sql<{ id: string }[]>`
     INSERT INTO companies (conglomerate_id, slug, name, mission, subdomain, email_address, db_name)
     VALUES (${input.conglomerateId}, ${spec.slug}, ${spec.name}, ${spec.mission},
-            ${`${spec.slug}.${DOMAIN}`}, ${`${spec.slug}@${DOMAIN}`}, ${`corp_${spec.slug.replaceAll("-", "_")}`})
+            ${`${spec.slug}.${DOMAIN}`}, ${`${spec.slug}@${MAIL_DOMAIN}`}, ${`corp_${spec.slug.replaceAll("-", "_")}`})
     ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
     RETURNING id`;
   const companyId = row!.id;
