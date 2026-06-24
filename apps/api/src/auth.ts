@@ -21,6 +21,13 @@ import type { MiddlewareHandler } from "hono";
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp";
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+// Shared session across subdomains (§3). The dashboard is server-rendered on a
+// different host than the API (e.g. apex `opencorp.app` vs `api.opencorp.app`),
+// so the dashboard's SSR can only forward the session cookie if the browser
+// actually sends it to the apex — which needs the cookie scoped to the parent
+// domain. Set COOKIE_DOMAIN=".opencorp.app" in prod; unset locally (single host,
+// http) so dev keeps a plain host-only cookie.
+const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN;
 
 export const AUTH_DISABLED = process.env.OPENCORP_AUTH_DISABLED === "1";
 export const DEV_USER_ID = "dev-user";
@@ -44,6 +51,12 @@ export const auth = betterAuth({
     ? { github: { clientId: GITHUB_ID!, clientSecret: GITHUB_SECRET! } }
     : {},
   trustedOrigins: [WEB_ORIGIN],
+  // In prod, scope the session cookie to the parent domain so the apex dashboard
+  // and the api subdomain share it (better-auth keeps secure + __Secure- prefix
+  // under https). No-op locally when COOKIE_DOMAIN is unset.
+  ...(COOKIE_DOMAIN
+    ? { advanced: { crossSubDomainCookies: { enabled: true, domain: COOKIE_DOMAIN } } }
+    : {}),
   databaseHooks: {
     user: {
       create: {
