@@ -5,3 +5,5 @@ export * from "./companySpec";
 export * from "./trace";
 export * from "./ceo";
 export * from "./departments";
+export * from "./lessons";
+export * from "./embed";

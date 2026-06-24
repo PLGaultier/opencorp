@@ -1,0 +1,1 @@
+ALTER TABLE "lessons" ADD COLUMN "last_decayed_at" timestamp with time zone;

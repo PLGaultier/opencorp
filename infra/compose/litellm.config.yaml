@@ -18,6 +18,16 @@ model_list:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  # Optional: semantic lesson recall (§lessons phase 2). Anthropic has no
+  # embeddings API, so point this at a 1024-dim model (the lessons.embedding
+  # column is vector(1024)) — e.g. Voyage's voyage-3. Leave it out and the
+  # feature degrades to score-ranked + keyword recall on the chat key alone.
+  # Set EMBEDDING_MODEL=embedding to turn it on.
+  # - model_name: embedding
+  #   litellm_params:
+  #     model: voyage/voyage-3
+  #     api_key: os.environ/VOYAGE_API_KEY
+
 litellm_settings:
   num_retries: 2
   # Degrade gracefully under load/outage: Opus → Sonnet → Haiku.

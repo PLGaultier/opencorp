@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { chat, type LlmConfig, type ChatOptions } from "./client";
 import { CeoTask, type CeoContext } from "./ceo";
+import { renderLessonsBlock, DEPARTMENT_CATEGORIES } from "./lessons";
 
 /**
  * Multi-agent departments (§14 M5): CMO/CTO/CFO sub-planners that each review
@@ -40,7 +41,7 @@ export interface DepartmentReport extends DepartmentProposal {
   department: DepartmentKey;
 }
 
-const contextBlock = (ctx: CeoContext): string =>
+const contextBlock = (ctx: CeoContext, dept: DepartmentKey): string =>
   [
     `Credit balance: ${ctx.creditBalance}`,
     `Daily task cap: ${ctx.dailyTaskCap} · tasks currently queued: ${ctx.queuedTasks}`,
@@ -51,7 +52,14 @@ const contextBlock = (ctx: CeoContext): string =>
     `Unread inbox:\n${
       ctx.unreadEmails.map((e) => `- ${e.from}: ${e.subject}`).join("\n") || "- empty"
     }`,
-  ].join("\n");
+    // Only this department's slice of the tips sheet (keeps each sub-planner's
+    // prompt small and on-topic).
+    ...(ctx.lessons?.length
+      ? [renderLessonsBlock(ctx.lessons, { categories: DEPARTMENT_CATEGORIES[dept], max: 8 })]
+      : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
 export async function planDepartment(
   cfg: LlmConfig | null,
@@ -61,7 +69,7 @@ export async function planDepartment(
   trace?: ChatOptions["trace"],
 ): Promise<DepartmentReport> {
   if (!cfg) return fallbackDepartment(dept, ctx);
-  const user = `Today's heartbeat context:\n\n${contextBlock(ctx)}\n\nRespond with the ${DEPARTMENTS[dept].title} proposal JSON only.`;
+  const user = `Today's heartbeat context:\n\n${contextBlock(ctx, dept)}\n\nRespond with the ${DEPARTMENTS[dept].title} proposal JSON only.`;
   let raw = await chat(cfg, { tier: "standard", system: systemPrompt, user, jsonOnly: true, trace });
   for (let attempt = 0; ; attempt++) {
     const parsed = DepartmentProposal.safeParse(tryJson(raw));

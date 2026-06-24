@@ -9,6 +9,7 @@ import { monthlyAdSpendCents } from "./ads";
 import { emailFor, isValidAddress, listUnsubscribeHeader, syncInbox } from "./providers/email";
 import { getAnalytics } from "./providers/analytics";
 import { webSearch } from "./providers/research";
+import { embedMaybe, toVectorLiteral } from "@opencorp/llm";
 import type { BrowserProvider } from "./providers/browser";
 
 /**
@@ -844,6 +845,88 @@ export const registry: Registry = {
           SELECT reason, COALESCE(SUM(delta),0) AS total, count(*) AS n
           FROM credit_entries WHERE company_id = ${ctx.companyId}
           GROUP BY reason`;
+      },
+    },
+  },
+
+  // ── memory-mcp (§lessons) ─────────────────────────────────────────────────
+  // The compounding tips sheet. The heartbeat injects only a small ranked digest
+  // into prompts; this server is the on-demand path so an agent can pull deeper
+  // recall (search) or write a tip the moment it discovers one (record_lesson),
+  // without the whole corpus ever entering a prompt. Phase 1 is keyword + score
+  // ranked (no embeddings), degrading like search_documents.
+  memory: {
+    search_lessons: {
+      schema: z.object({ query: z.string().min(1).max(200), limit: z.number().int().min(1).max(20).default(8) }),
+      write: false,
+      async handler(ctx, args: { query: string; limit: number }) {
+        const [c] = await ctx.sql<{ conglomerate_id: string }[]>`
+          SELECT conglomerate_id FROM companies WHERE id = ${ctx.companyId}`;
+        const cid = c!.conglomerate_id;
+        // Semantic recall when embeddings are configured (phase 2); otherwise
+        // degrade to keyword — same offline-tolerant pattern as search_documents.
+        const qvec = await embedMaybe(args.query);
+        if (qvec) {
+          return ctx.sql`
+            SELECT text, category, scope, score, wins, losses FROM lessons
+            WHERE status = 'active' AND conglomerate_id = ${cid}
+              AND (scope = 'conglomerate' OR company_id = ${ctx.companyId})
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> ${toVectorLiteral(qvec)}::vector LIMIT ${args.limit}`;
+        }
+        return ctx.sql`
+          SELECT text, category, scope, score, wins, losses FROM lessons
+          WHERE status = 'active' AND conglomerate_id = ${cid}
+            AND (scope = 'conglomerate' OR company_id = ${ctx.companyId})
+            AND text ILIKE ${"%" + args.query + "%"}
+          ORDER BY score DESC LIMIT ${args.limit}`;
+      },
+    },
+    list_lessons: {
+      // The agent's own ranked tips sheet (top by score) — the same slice the CEO sees.
+      schema: z.object({ limit: z.number().int().min(1).max(30).default(15) }),
+      write: false,
+      async handler(ctx, args: { limit: number }) {
+        const [c] = await ctx.sql<{ conglomerate_id: string }[]>`
+          SELECT conglomerate_id FROM companies WHERE id = ${ctx.companyId}`;
+        return ctx.sql`
+          SELECT text, category, scope FROM lessons
+          WHERE status = 'active' AND conglomerate_id = ${c!.conglomerate_id}
+            AND (scope = 'conglomerate' OR company_id = ${ctx.companyId})
+          ORDER BY score DESC, last_reinforced_at DESC NULLS LAST LIMIT ${args.limit}`;
+      },
+    },
+    record_lesson: {
+      // Let a worker bank a durable, reusable tip it just learned. Company-scoped
+      // (the promoter lifts proven ones to the conglomerate). Deduped so the same
+      // insight doesn't accrue twice.
+      schema: z.object({
+        text: z.string().min(8).max(280),
+        category: z
+          .enum(["marketing", "outreach", "pricing", "product", "ops", "finance", "general"])
+          .default("general"),
+      }),
+      write: true,
+      async handler(ctx, args: { text: string; category: string }) {
+        const [c] = await ctx.sql<{ conglomerate_id: string }[]>`
+          SELECT conglomerate_id FROM companies WHERE id = ${ctx.companyId}`;
+        const [dup] = await ctx.sql`
+          SELECT 1 FROM lessons WHERE company_id = ${ctx.companyId} AND lower(text) = lower(${args.text}) LIMIT 1`;
+        if (dup) return { recorded: false, reason: "duplicate" };
+        const vec = await embedMaybe(args.text); // null when embeddings off → keyword recall
+        const [l] = await ctx.sql<{ id: string }[]>`
+          INSERT INTO lessons (scope, conglomerate_id, company_id, category, text, source, evidence, embedding)
+          VALUES ('company', ${c!.conglomerate_id}, ${ctx.companyId}, ${args.category}, ${args.text}, 'worker',
+            ${ctx.sql.json({ taskId: ctx.taskId })},
+            ${vec ? ctx.sql`${toVectorLiteral(vec)}::vector` : null})
+          RETURNING id`;
+        await ctx.ledger.append({
+          companyId: ctx.companyId,
+          actor: `worker:${ctx.taskId}`,
+          eventType: "lessons_distilled",
+          payload: { lessons: [args.text], source: "worker" },
+        });
+        return { recorded: true, lessonId: l!.id };
       },
     },
   },

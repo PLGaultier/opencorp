@@ -71,6 +71,20 @@
       "when": 1781803370685,
       "tag": "0009_cultured_impossible_man",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1782284770527,
+      "tag": "0010_careful_ultragirl",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1782293044720,
+      "tag": "0011_rainy_sleepwalker",
+      "breakpoints": true
     }
   ]
 }

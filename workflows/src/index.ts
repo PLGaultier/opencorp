@@ -14,10 +14,17 @@ export {
 export {
   applyCeoPlan,
   ceoCompany,
+  decayConglomerateLessons,
+  distillAndStoreLessons,
   ensureDepartmentAgents,
   expireStaleApprovals,
   gatherCeoContext,
+  gatherRewardSignal,
   loadCeoPrompt,
   loadDepartmentPrompt,
+  promoteCompanyLessons,
+  qualifiesForPromotion,
+  reinforceLessons,
   type CeoCompany,
+  type RewardSignal,
 } from "./ceo";
