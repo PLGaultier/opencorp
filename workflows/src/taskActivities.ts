@@ -297,6 +297,25 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
     };
   }
 
+  // §10 cost guard: a conglomerate that can't fund even one task (balance below a
+  // single task's up-front hold) gains nothing from the paid planning fan-out —
+  // applyCeoPlan wouldn't queue anything anyway. But the C-suite + distiller LLM
+  // calls are NOT credit-charged, so without this they'd keep burning the platform
+  // API key every heartbeat for a frozen company (the main multi-tenant exposure).
+  // Skip the whole fan-out and tell the owner to top up.
+  const planningFunds = await creditBalance(company.conglomerateId);
+  if (planningFunds < DEFAULT_TASK_ESTIMATE_CENTS) {
+    await ledger.append({
+      companyId,
+      actor: "ceo",
+      eventType: "ceo_plan",
+      payload: { skipped: "insufficient_credits", balance: planningFunds, promptHash: hash },
+    });
+    return {
+      userBrief: `Out of credits (balance ${planningFunds}) — autonomous planning is paused to avoid spend. Top up to resume work.`,
+    };
+  }
+
   const cfg = llmConfigFromEnv();
   const tracer = tracerFromEnv();
   const day = new Date().toISOString().slice(0, 10);
