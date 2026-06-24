@@ -2,7 +2,7 @@
   "name": "opencorp",
   "private": true,
   "version": "0.1.0",
-  "description": "Open-source autonomous company platform with radical transparency",
+  "description": "Self-hostable autonomous company platform with radical transparency",
   "workspaces": [
     "apps/*",
     "services/*",

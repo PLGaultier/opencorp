@@ -1,4 +1,4 @@
-# OPENCORP — Open-Source Autonomous Company Platform
+# OPENCORP — Autonomous Company Platform
 ## Agent Instruction File & Full Technical Specification
 
 > **Audience:** This document is written as an instruction file for an implementing agent (e.g., Claude Code) and for human engineers. Every section contains concrete, opinionated technical decisions. When a choice is made, build that choice; alternatives are listed only as fallbacks.
