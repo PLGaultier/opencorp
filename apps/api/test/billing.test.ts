@@ -46,9 +46,9 @@ describe("subscribe", () => {
     const sub = await subscribe(store, none, append, "g1", "builder", new Date("2026-06-01T00:00:00Z"));
     expect(sub.plan).toBe("builder");
     expect(store.grants).toEqual([
-      { conglomerateId: "g1", credits: 100, meta: { plan: "builder", period: "builder:2026-06-01" } },
+      { conglomerateId: "g1", credits: PLANS.builder.credits, meta: { plan: "builder", period: "builder:2026-06-01" } },
     ]);
-    expect(events[0]).toMatchObject({ reason: "grant", delta: 100 });
+    expect(events[0]).toMatchObject({ reason: "grant", delta: PLANS.builder.credits });
   });
 });
 
