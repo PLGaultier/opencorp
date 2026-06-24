@@ -1,0 +1,1 @@
+ALTER TABLE "conglomerates" ALTER COLUMN "daily_credit_cap" SET DEFAULT '500';
