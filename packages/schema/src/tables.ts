@@ -61,6 +61,11 @@ export const withdrawalStatus = pgEnum("withdrawal_status", [
 export const planId = pgEnum("plan_id", ["free", "builder", "pro"]);
 export const subscriptionStatus = pgEnum("subscription_status", ["active", "canceled"]);
 export const approvalStatus = pgEnum("approval_status", ["pending", "approved", "rejected"]);
+// Compounding agent memory (§"lessons"): a tip is scoped to one company or shared
+// across the whole conglomerate; `active` tips feed the bounded heartbeat digest,
+// `retired` ones decay below the floor but stay for audit / search.
+export const lessonScope = pgEnum("lesson_scope", ["company", "conglomerate"]);
+export const lessonStatus = pgEnum("lesson_status", ["active", "retired"]);
 
 // ── Auth (Better Auth core tables; §3 — orgs = conglomerates) ──────────────
 // Field names/shapes are what better-auth's drizzle adapter expects. Text PKs
@@ -258,6 +263,53 @@ export const documents = pgTable("documents", {
   createdBy: text("created_by").notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ── Lessons: compounding, scored agent memory ("tips sheet") ───────────────
+// Distinct from `documents` (large, customer-facing, company-only artifacts): a
+// lesson is a short imperative tip that the heartbeat distiller writes and the
+// reward reinforcer scores. Two scopes — `company` (private to one autonomous
+// company) and `conglomerate` (promoted, shared across the owner's companies).
+// Only a hard-capped, score-ranked slice is ever injected into a prompt; the
+// full set lives here behind the `memory` MCP tool, so the context window never
+// reads the whole sheet. `embedding` is reserved for phase-2 semantic recall —
+// phase 1 ranks by `score` and filters by `category`.
+export const lessons = pgTable(
+  "lessons",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scope: lessonScope("scope").notNull(),
+    conglomerateId: uuid("conglomerate_id")
+      .notNull()
+      .references(() => conglomerates.id),
+    // null for conglomerate-scoped (shared) lessons; set for company-scoped ones.
+    companyId: uuid("company_id").references(() => companies.id),
+    // department-aligned bucket so each sub-planner gets only its slice:
+    // 'marketing' | 'outreach' | 'pricing' | 'product' | 'ops' | 'finance' | 'general'
+    category: text("category").notNull().default("general"),
+    text: text("text").notNull(), // the tip, short + imperative
+    // Why we believe it: task ids / ledger seqs / payment ids that support it.
+    evidence: jsonb("evidence"),
+    // Reinforced by attributed rewards, decayed over time; ranks the digest.
+    score: numeric("score").notNull().default("1"),
+    wins: integer("wins").notNull().default(0),
+    losses: integer("losses").notNull().default(0),
+    embedding: vector("embedding", { dimensions: 1024 }), // phase 2
+    status: lessonStatus("status").notNull().default("active"),
+    source: text("source").notNull().default("distiller"), // distiller|reinforce|worker|owner
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    lastReinforcedAt: timestamp("last_reinforced_at", { withTimezone: true }),
+    // Decay clock for shared (conglomerate) lessons: decay is time-proportional
+    // (score × dailyDecay^elapsedDays) off this timestamp, so any company's
+    // heartbeat can run it without N companies over-decaying a shared tip.
+    // Independent of updated_at, which unrelated writes also touch.
+    lastDecayedAt: timestamp("last_decayed_at", { withTimezone: true }),
+  },
+  (t) => [
+    // digest read path: top active lessons for a scope, best score first
+    index("lessons_scope_score_idx").on(t.conglomerateId, t.companyId, t.status, t.score),
+  ],
+);
 
 // ── Email mirror (synced from Stalwart via JMAP) ───────────────────────────
 export const emails = pgTable("emails", {

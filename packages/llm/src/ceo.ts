@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { chat, type LlmConfig, type ChatOptions } from "./client";
 import type { DepartmentReport } from "./departments";
+import { renderLessonsBlock, type LessonTip } from "./lessons";
 
 /**
  * CEO planning brain (§5.2 steps 1–3) and chat (§1 feature 2). Pure LLM I/O:
@@ -45,6 +46,12 @@ export interface CeoContext {
   pendingApprovals?: { server: string; tool: string }[];
   /** Tools the owner recently rejected; the CEO should not keep re-proposing. */
   recentlyRejected?: string[];
+  /**
+   * Compounding tips sheet (company + conglomerate scope), already ranked by
+   * score and hard-capped by the caller — the context window never sees the
+   * whole corpus, only this slice.
+   */
+  lessons?: LessonTip[];
 }
 
 /** §5.4 — the prompt hash recorded in ledger events for reproducibility. */
@@ -69,6 +76,7 @@ const contextBlock = (ctx: CeoContext): string =>
     ...(ctx.recentlyRejected?.length
       ? [`Recently rejected by the owner (do not re-propose): ${ctx.recentlyRejected.join(", ")}`]
       : []),
+    ...(ctx.lessons?.length ? [renderLessonsBlock(ctx.lessons, { max: 16 })] : []),
   ].join("\n");
 
 /** Department proposals rendered for the CEO synthesis prompt (§14 M5). */

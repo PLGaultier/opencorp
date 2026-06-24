@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCompany, getEmails } from "@/lib/data";
+import { forwardCookie, isOwner } from "@/lib/server-auth";
 
 const dt = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 export default async function InboxPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const [data, emails] = await Promise.all([getCompany(slug), getEmails(slug)]);
+  // The inbox is owner-only (§4): a non-owner gets the same 404 as a missing page.
+  if (!(await isOwner(slug))) notFound();
+  const [data, emails] = await Promise.all([getCompany(slug), getEmails(slug, undefined, await forwardCookie())]);
   if (!data) notFound();
   const { company } = data;
 

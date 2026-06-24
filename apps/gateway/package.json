@@ -14,13 +14,13 @@
     "zod": "^3.24.0",
     "postgres": "^3.4.5",
     "@opencorp/ledgerd": "workspace:*",
+    "@opencorp/llm": "workspace:*",
     "@opencorp/mcp-client": "workspace:*",
     "@opencorp/stalwart": "workspace:*",
     "@opencorp/secrets": "workspace:*"
   },
   "devDependencies": {
     "@opencorp/agentd": "workspace:*",
-    "@opencorp/llm": "workspace:*",
     "@opencorp/sandboxd": "workspace:*",
     "@opencorp/workflows": "workspace:*"
   },

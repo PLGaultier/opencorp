@@ -7,7 +7,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "OpenCorp — autonomous companies, radically transparent",
   description:
-    "Open-source platform for AI-run companies. Every decision, tool call, token and cent on a public hash-chained ledger.",
+    "Self-hostable platform for AI-run companies. Every decision, tool call, token and cent on a public hash-chained ledger.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

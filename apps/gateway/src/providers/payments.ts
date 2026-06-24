@@ -24,6 +24,34 @@ export interface PayoutRequest {
   currency: string;
   /** Stripe Connect account id (acct_...) for the destination; null in local mode. */
   destination: string | null;
+  /**
+   * Idempotency key for the external transfer (§10 money-out). Keyed on the
+   * withdrawalId so a durable-workflow retry after a mid-flight crash re-drives
+   * the *same* transfer instead of creating a second one — Stripe returns the
+   * original. Ignored in local mode.
+   */
+  idempotencyKey?: string;
+}
+
+/**
+ * A Stripe API call that came back with a non-2xx response. `terminal` (a 4xx)
+ * means Stripe rejected the request and a retry won't help — the caller should
+ * give up and unwind. A 5xx (or a thrown network error, which is *not* this
+ * type) is transient: the caller should let the durable workflow retry.
+ */
+export class StripeApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "StripeApiError";
+  }
+  get terminal(): boolean {
+    return this.status >= 400 && this.status < 500;
+  }
+}
+
+/** True for a Stripe rejection that won't succeed on retry (4xx). */
+export function isTerminalStripeError(err: unknown): boolean {
+  return err instanceof StripeApiError && err.terminal;
 }
 
 export interface PaymentsProvider {
@@ -90,25 +118,37 @@ class StripePayments implements PaymentsProvider {
 
   async payout(req: PayoutRequest) {
     if (!req.destination) throw new Error("stripe payout needs a connected account — complete Connect onboarding first");
-    const transfer = await this.call("transfers", {
-      amount: String(req.amountCents),
-      currency: req.currency,
-      destination: req.destination,
-    });
+    const transfer = await this.call(
+      "transfers",
+      {
+        amount: String(req.amountCents),
+        currency: req.currency,
+        destination: req.destination,
+      },
+      req.idempotencyKey,
+    );
     return { transferId: `stripe:${transfer.id}` };
   }
 
-  private async call(path: string, form: Record<string, string>): Promise<{ id: string; [k: string]: unknown }> {
+  private async call(
+    path: string,
+    form: Record<string, string>,
+    idempotencyKey?: string,
+  ): Promise<{ id: string; [k: string]: unknown }> {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.key}`,
+      "content-type": "application/x-www-form-urlencoded",
+    };
+    // Stripe replays the original response for a repeated Idempotency-Key, so a
+    // retried money-out never charges twice (§10).
+    if (idempotencyKey) headers["idempotency-key"] = idempotencyKey;
     const res = await fetch(`https://api.stripe.com/v1/${path}`, {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${this.key}`,
-        "content-type": "application/x-www-form-urlencoded",
-      },
+      headers,
       body: new URLSearchParams(form),
     });
     const body = (await res.json()) as { id: string; error?: { message: string } };
-    if (!res.ok) throw new Error(`stripe ${path} failed: ${body.error?.message ?? res.status}`);
+    if (!res.ok) throw new StripeApiError(`stripe ${path} failed: ${body.error?.message ?? res.status}`, res.status);
     return body;
   }
 }

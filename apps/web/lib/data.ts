@@ -385,10 +385,16 @@ export async function getCompany(
 
 // no-store: these back mutation UIs (create/edit/run) that router.refresh()
 // after writes — a revalidate window would show stale rows.
-export async function getCompanyTasks(slug: string): Promise<TaskDetail[]> {
+// Owner-only endpoint (§4): forward the caller's session cookie so the API can
+// authorize. Without a cookie (a logged-out visitor) the API returns 403 and we
+// degrade to an empty list — the page simply doesn't render the panel.
+export async function getCompanyTasks(slug: string, cookie?: string): Promise<TaskDetail[]> {
   if (!API_URL) return demoTaskDetails[slug] ?? [];
   try {
-    const res = await fetch(`${API_URL}/api/companies/${slug}/tasks`, { cache: "no-store" });
+    const res = await fetch(`${API_URL}/api/companies/${slug}/tasks`, {
+      cache: "no-store",
+      headers: cookie ? { cookie } : undefined,
+    });
     if (!res.ok) return [];
     const { tasks } = (await res.json()) as { tasks: TaskDetail[] };
     return tasks;
@@ -397,10 +403,13 @@ export async function getCompanyTasks(slug: string): Promise<TaskDetail[]> {
   }
 }
 
-export async function getTask(slug: string, taskId: string): Promise<TaskDetail | null> {
+export async function getTask(slug: string, taskId: string, cookie?: string): Promise<TaskDetail | null> {
   if (!API_URL) return demoTaskDetails[slug]?.find((t) => t.id === taskId) ?? null;
   try {
-    const res = await fetch(`${API_URL}/api/companies/${slug}/tasks/${taskId}`, { cache: "no-store" });
+    const res = await fetch(`${API_URL}/api/companies/${slug}/tasks/${taskId}`, {
+      cache: "no-store",
+      headers: cookie ? { cookie } : undefined,
+    });
     if (!res.ok) return null;
     const { task } = (await res.json()) as { task: TaskDetail };
     return task;
@@ -471,11 +480,15 @@ export async function getProducts(slug: string): Promise<Product[]> {
 
 export async function getPayments(
   slug: string,
+  cookie?: string,
 ): Promise<{ summary: RevenueSummary; payments: Payment[] }> {
   if (!API_URL)
     return demoPayments[slug] ?? { summary: { grossCents: 0, feesCents: 0, netCents: 0, count: 0 }, payments: [] };
   try {
-    const res = await fetch(`${API_URL}/api/companies/${slug}/payments`, { next: { revalidate: 30 } });
+    const res = await fetch(`${API_URL}/api/companies/${slug}/payments`, {
+      cache: "no-store",
+      headers: cookie ? { cookie } : undefined,
+    });
     if (!res.ok) return { summary: { grossCents: 0, feesCents: 0, netCents: 0, count: 0 }, payments: [] };
     return (await res.json()) as { summary: RevenueSummary; payments: Payment[] };
   } catch {
@@ -483,10 +496,13 @@ export async function getPayments(
   }
 }
 
-export async function getCampaigns(slug: string): Promise<Campaign[]> {
+export async function getCampaigns(slug: string, cookie?: string): Promise<Campaign[]> {
   if (!API_URL) return demoCampaigns[slug] ?? [];
   try {
-    const res = await fetch(`${API_URL}/api/companies/${slug}/campaigns`, { next: { revalidate: 30 } });
+    const res = await fetch(`${API_URL}/api/companies/${slug}/campaigns`, {
+      cache: "no-store",
+      headers: cookie ? { cookie } : undefined,
+    });
     if (!res.ok) return [];
     const { campaigns } = (await res.json()) as { campaigns: Campaign[] };
     return campaigns;
@@ -495,14 +511,17 @@ export async function getCampaigns(slug: string): Promise<Campaign[]> {
   }
 }
 
-export async function getEmails(slug: string, direction?: "in" | "out"): Promise<Email[]> {
+export async function getEmails(slug: string, direction?: "in" | "out", cookie?: string): Promise<Email[]> {
   if (!API_URL) {
     const all = demoEmails[slug] ?? [];
     return direction ? all.filter((e) => e.direction === direction) : all;
   }
   try {
     const qs = direction ? `?direction=${direction}` : "";
-    const res = await fetch(`${API_URL}/api/companies/${slug}/emails${qs}`, { cache: "no-store" });
+    const res = await fetch(`${API_URL}/api/companies/${slug}/emails${qs}`, {
+      cache: "no-store",
+      headers: cookie ? { cookie } : undefined,
+    });
     if (!res.ok) return [];
     const { emails } = (await res.json()) as { emails: Email[] };
     return emails;
@@ -530,10 +549,13 @@ export async function getAnalytics(slug: string): Promise<SiteAnalytics> {
   }
 }
 
-export async function getEmail(slug: string, emailId: string): Promise<Email | null> {
+export async function getEmail(slug: string, emailId: string, cookie?: string): Promise<Email | null> {
   if (!API_URL) return demoEmails[slug]?.find((e) => e.id === emailId) ?? null;
   try {
-    const res = await fetch(`${API_URL}/api/companies/${slug}/emails/${emailId}`, { cache: "no-store" });
+    const res = await fetch(`${API_URL}/api/companies/${slug}/emails/${emailId}`, {
+      cache: "no-store",
+      headers: cookie ? { cookie } : undefined,
+    });
     if (!res.ok) return null;
     const { email } = (await res.json()) as { email: Email };
     return email;

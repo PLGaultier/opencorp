@@ -30,6 +30,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@opencorp/ledgerd": "workspace:*",
+        "@opencorp/llm": "workspace:*",
         "@opencorp/mcp-client": "workspace:*",
         "@opencorp/secrets": "workspace:*",
         "@opencorp/stalwart": "workspace:*",
@@ -39,7 +40,6 @@
       },
       "devDependencies": {
         "@opencorp/agentd": "workspace:*",
-        "@opencorp/llm": "workspace:*",
         "@opencorp/sandboxd": "workspace:*",
         "@opencorp/workflows": "workspace:*",
       },

@@ -453,11 +453,18 @@ export function createGateway(opts?: {
       SELECT conglomerate_id FROM companies WHERE id = ${parsed.data.companyId}`;
     if (!co) return c.json({ error: "company_not_found" }, 404);
 
-    const result = await processWithdrawal(sql, ledger, secrets, {
-      ...parsed.data,
-      conglomerateId: co.conglomerate_id,
-    });
-    return c.json(result, result.status === "failed" ? 422 : 200);
+    // A thrown error here is transient (Stripe 5xx / network): return 5xx so the
+    // durable Withdrawal workflow retries. A terminal failure comes back as a
+    // result with status 'failed' (422), which the workflow treats as final.
+    try {
+      const result = await processWithdrawal(sql, ledger, secrets, {
+        ...parsed.data,
+        conglomerateId: co.conglomerate_id,
+      });
+      return c.json(result, result.status === "failed" ? 422 : 200);
+    } catch (err) {
+      return c.json({ error: "withdraw_transient", message: err instanceof Error ? err.message : String(err) }, 502);
+    }
   });
 
   // Connect Express onboarding (§10). One connected account per conglomerate

@@ -18,11 +18,16 @@ import {
 import {
   applyCeoPlan,
   ceoCompany,
+  decayConglomerateLessons,
+  distillAndStoreLessons,
   ensureDepartmentAgents,
   expireStaleApprovals,
   gatherCeoContext,
+  gatherRewardSignal,
   loadCeoPrompt,
   loadDepartmentPrompt,
+  promoteCompanyLessons,
+  reinforceLessons,
 } from "./ceo";
 
 /** TaskRun + CompanyHeartbeat activities (§5.2, §5.3). */
@@ -365,6 +370,37 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
       ...(tracer?.publicUrl(traceId) ? { traceUrl: tracer.publicUrl(traceId) } : {}),
     },
   });
+  // Compounding memory (§lessons): score the existing tips against this cycle's
+  // rewards, then distil any new ones from what changed. Best-effort — a learning
+  // hiccup must never break the heartbeat that just produced a valid plan.
+  try {
+    const reward = await gatherRewardSignal(sql, company);
+    await reinforceLessons(sql, company, reward);
+    const learned = await distillAndStoreLessons(
+      sql,
+      ledger,
+      company,
+      ctx,
+      reward,
+      cfg,
+      tracer ? { tracer, traceId: `lessons-${companyId}-${day}`, name: "distill-lessons" } : undefined,
+    );
+    if (learned.length) await tracer?.flush();
+    // Lift any lessons that have proven themselves up to the shared sheet so the
+    // conglomerate's other companies inherit them (idempotent — only acts on
+    // newly-qualified lessons), then age the shared sheet so it self-prunes
+    // (time-proportional, so N companies hitting it can't over-decay).
+    await promoteCompanyLessons(sql, ledger, company);
+    await decayConglomerateLessons(sql, ledger, company.conglomerateId);
+  } catch (err) {
+    await ledger.append({
+      companyId,
+      actor: "ceo",
+      eventType: "lessons_distilled",
+      payload: { error: err instanceof Error ? err.message : String(err) },
+    });
+  }
+
   // Guarantee the owner is told about pending approvals even when the LLM brief
   // omitted them — the human-in-the-loop only works if the human is pulled in.
   const pending = ctx.pendingApprovals?.length ?? 0;

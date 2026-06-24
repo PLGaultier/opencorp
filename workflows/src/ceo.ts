@@ -4,10 +4,14 @@ import type { Sql } from "postgres";
 import type { Ledger } from "@opencorp/ledgerd";
 import {
   DEPARTMENTS,
+  distillLessons,
+  embedMaybe,
   promptHash,
+  toVectorLiteral,
   type CeoContext,
   type CeoPlan,
   type DepartmentKey,
+  type LlmConfig,
 } from "@opencorp/llm";
 
 /**
@@ -93,7 +97,7 @@ export async function ceoCompany(sql: Sql, companyId: string): Promise<CeoCompan
 
 /** §5.2 step 1 — mission, last reports, revenue delta, inbox digest, balance, caps. */
 export async function gatherCeoContext(sql: Sql, company: CeoCompany): Promise<CeoContext> {
-  const [reports, [balance], [revenue], emails, [queued], pending, rejected] = await Promise.all([
+  const [reports, [balance], [revenue], emails, [queued], pending, rejected, lessons] = await Promise.all([
     sql<{ title: string; status: string; summary: string | null }[]>`
       SELECT title, status, COALESCE(result_summary, error) AS summary FROM tasks
       WHERE company_id = ${company.id} AND status IN ('done', 'failed')
@@ -120,6 +124,15 @@ export async function gatherCeoContext(sql: Sql, company: CeoCompany): Promise<C
       WHERE company_id = ${company.id} AND status = 'rejected'
         AND decided_by IS NOT NULL AND decided_at > now() - interval '48 hours'
       LIMIT 10`,
+    // Compounding tips sheet: this company's own lessons + the conglomerate's
+    // shared ones, best score first. Capped here; the renderer caps again per
+    // consumer, so the prompt cost stays fixed regardless of corpus size.
+    sql<{ text: string; category: string; scope: "company" | "conglomerate" }[]>`
+      SELECT text, category, scope FROM lessons
+      WHERE status = 'active' AND conglomerate_id = ${company.conglomerateId}
+        AND (scope = 'conglomerate' OR company_id = ${company.id})
+      ORDER BY score DESC, last_reinforced_at DESC NULLS LAST
+      LIMIT 24`,
   ]);
   return {
     company: { name: company.name, mission: company.mission },
@@ -131,6 +144,7 @@ export async function gatherCeoContext(sql: Sql, company: CeoCompany): Promise<C
     unreadEmails: emails.map((e) => ({ from: e.from_addr, subject: e.subject })),
     pendingApprovals: pending.map((a) => ({ server: a.server, tool: a.tool })),
     recentlyRejected: rejected.map((r) => r.tool),
+    lessons: lessons.map((l) => ({ text: l.text, category: l.category, scope: l.scope })),
   };
 }
 
@@ -197,4 +211,258 @@ export async function applyCeoPlan(
   }
 
   return { createdTasks, missionUpdated };
+}
+
+// ── Lessons: compounding memory (distil + reward reinforce) ─────────────────
+// Tuning for the deterministic reinforcer. Every heartbeat decays the company's
+// active lessons; rewards (sales / replies) bump the categories that drive them,
+// so a tip only stays in the digest while it keeps coinciding with payoff.
+const LESSON_DECAY = 0.95; // multiplicative, per heartbeat
+const LESSON_FLOOR = 0.3; // below this an un-reinforced lesson retires
+const SALE_REWARD = 0.6; // score added per heartbeat with sales (×min(sales,3))
+const REPLY_REWARD = 0.3; // score added per heartbeat with inbound replies
+const REVENUE_CATEGORIES = ["marketing", "outreach", "pricing", "product"];
+const REPLY_CATEGORIES = ["outreach", "marketing"];
+
+/** The reward deltas the distiller grounds on and the reinforcer scores against. */
+export interface RewardSignal {
+  salesCount: number;
+  repliesReceived: number;
+}
+
+/**
+ * Sales + "positive outbound" since yesterday. A reply counts only when it comes
+ * from an address this company actually emailed — i.e. a cold-outreach target
+ * wrote back — so noise (newsletters, bots) doesn't reinforce anything.
+ */
+export async function gatherRewardSignal(sql: Sql, company: CeoCompany): Promise<RewardSignal> {
+  const [[sales], [replies]] = await Promise.all([
+    sql<{ n: string }[]>`
+      SELECT count(*) AS n FROM payments
+      WHERE company_id = ${company.id} AND created_at > now() - interval '24 hours'`,
+    sql<{ n: string }[]>`
+      SELECT count(*) AS n FROM emails e
+      WHERE e.company_id = ${company.id} AND e.direction = 'in'
+        AND e.created_at > now() - interval '24 hours'
+        AND EXISTS (
+          SELECT 1 FROM emails o
+          WHERE o.company_id = ${company.id} AND o.direction = 'out'
+            AND e.from_addr = ANY(o.to_addrs))`,
+  ]);
+  return { salesCount: Number(sales!.n), repliesReceived: Number(replies!.n) };
+}
+
+/**
+ * Deterministic reward reinforcement (no LLM): decay every active company lesson,
+ * bump the categories a reward implicates, then retire the faded. Company-scoped
+ * only — shared (conglomerate) lessons are maintained by the promoter, so a
+ * company heartbeat can't N×-decay them. Idempotency under Temporal retries is
+ * acceptable here: a re-run applies one extra mild decay, not a correctness bug.
+ */
+export async function reinforceLessons(
+  sql: Sql,
+  company: CeoCompany,
+  reward: RewardSignal,
+): Promise<{ reinforced: number; retired: number }> {
+  await sql`
+    UPDATE lessons SET score = score * ${LESSON_DECAY}, updated_at = now()
+    WHERE status = 'active' AND company_id = ${company.id}`;
+
+  let reinforced = 0;
+  if (reward.salesCount > 0) {
+    const bump = Math.min(3, reward.salesCount) * SALE_REWARD;
+    const r = await sql<{ id: string }[]>`
+      UPDATE lessons SET score = score + ${bump}, wins = wins + 1,
+        last_reinforced_at = now(), updated_at = now()
+      WHERE status = 'active' AND company_id = ${company.id}
+        AND category = ANY(${REVENUE_CATEGORIES}) RETURNING id`;
+    reinforced += r.length;
+  }
+  if (reward.repliesReceived > 0) {
+    const r = await sql<{ id: string }[]>`
+      UPDATE lessons SET score = score + ${REPLY_REWARD}, wins = wins + 1,
+        last_reinforced_at = now(), updated_at = now()
+      WHERE status = 'active' AND company_id = ${company.id}
+        AND category = ANY(${REPLY_CATEGORIES}) RETURNING id`;
+    reinforced += r.length;
+  }
+
+  const retired = await sql<{ id: string }[]>`
+    UPDATE lessons SET status = 'retired', updated_at = now()
+    WHERE status = 'active' AND company_id = ${company.id} AND score < ${LESSON_FLOOR}
+    RETURNING id`;
+  return { reinforced, retired: retired.length };
+}
+
+/**
+ * Distil 0–3 new company lessons from what changed this heartbeat (reward-grounded
+ * reflection, mini tier; deterministic offline). Deduped against the live table so
+ * Temporal retries don't double-insert. Returns the stored tip texts for the ledger.
+ */
+export async function distillAndStoreLessons(
+  sql: Sql,
+  ledger: Ledger,
+  company: CeoCompany,
+  ctx: CeoContext,
+  reward: RewardSignal,
+  cfg: LlmConfig | null,
+  trace?: Parameters<typeof distillLessons>[2],
+): Promise<string[]> {
+  const candidates = await distillLessons(
+    cfg,
+    {
+      company: { name: company.name, mission: company.mission },
+      recentReports: ctx.recentReports,
+      revenueCents24h: ctx.revenueCents24h,
+      salesCount: reward.salesCount,
+      repliesReceived: reward.repliesReceived,
+      existingLessons: (ctx.lessons ?? []).map((l) => l.text),
+    },
+    trace,
+  );
+
+  const stored: string[] = [];
+  for (const c of candidates) {
+    const [dup] = await sql`
+      SELECT 1 FROM lessons WHERE company_id = ${company.id} AND lower(text) = lower(${c.text}) LIMIT 1`;
+    if (dup) continue;
+    const vec = await embedMaybe(c.text); // null when embeddings off → keyword/score recall
+    await sql`
+      INSERT INTO lessons (scope, conglomerate_id, company_id, category, text, source, evidence, embedding)
+      VALUES ('company', ${company.conglomerateId}, ${company.id}, ${c.category}, ${c.text}, 'distiller',
+        ${sql.json({ reports: ctx.recentReports.map((r) => r.title), salesCount: reward.salesCount })},
+        ${vec ? sql`${toVectorLiteral(vec)}::vector` : null})`;
+    stored.push(c.text);
+  }
+  if (stored.length) {
+    await ledger.append({
+      companyId: company.id,
+      actor: "ceo",
+      eventType: "lessons_distilled",
+      payload: { lessons: stored },
+    });
+  }
+  return stored;
+}
+
+// ── Promoter: lift proven company lessons to the shared (conglomerate) sheet ──
+// A lesson that has compounded to high confidence in one company is worth
+// teaching its siblings. Promotion is idempotent — it only acts on lessons that
+// cross the threshold, and each action removes them from the candidate set — so
+// it can run on every heartbeat with no churn and no per-conglomerate schedule.
+export const PROMOTE_SCORE = 3.0; // a tip reinforced by several reward cycles
+export const PROMOTE_WINS = 2; // proven across at least two distinct cycles
+const MERGE_DISTANCE = 0.15; // cosine distance below which two tips are "the same"
+const MERGE_REWARD = 0.6; // a second company proving it reinforces the shared tip
+
+/** Pure promotion gate — factored out so it's unit-testable without a DB. */
+export function qualifiesForPromotion(l: { score: number; wins: number }): boolean {
+  return l.score >= PROMOTE_SCORE && l.wins >= PROMOTE_WINS;
+}
+
+/**
+ * Promote this company's high-confidence lessons to conglomerate scope. When a
+ * near-duplicate shared lesson already exists (semantic match if embeddings are
+ * on, else identical text — e.g. a sibling already promoted the same insight),
+ * merge: retire the company copy and reinforce the shared one, so a lesson
+ * independently learned across companies compounds rather than duplicating.
+ * Otherwise promote in place (the embedding and score ride along).
+ */
+export async function promoteCompanyLessons(
+  sql: Sql,
+  ledger: Ledger,
+  company: CeoCompany,
+): Promise<{ promoted: number; merged: number }> {
+  const candidates = await sql<{ id: string; text: string }[]>`
+    SELECT id, text FROM lessons
+    WHERE status = 'active' AND scope = 'company' AND company_id = ${company.id}
+      AND score >= ${PROMOTE_SCORE} AND wins >= ${PROMOTE_WINS}`;
+
+  let promoted = 0;
+  let merged = 0;
+  for (const cand of candidates) {
+    // Semantic near-duplicate among existing shared lessons (no-op when either
+    // side lacks an embedding); fall back to an exact-text match.
+    const [semantic] = await sql<{ id: string }[]>`
+      SELECT l2.id FROM lessons l1
+      JOIN lessons l2 ON l2.scope = 'conglomerate' AND l2.status = 'active'
+        AND l2.conglomerate_id = ${company.conglomerateId}
+      WHERE l1.id = ${cand.id}
+        AND l1.embedding IS NOT NULL AND l2.embedding IS NOT NULL
+        AND (l1.embedding <=> l2.embedding) < ${MERGE_DISTANCE}
+      ORDER BY (l1.embedding <=> l2.embedding) LIMIT 1`;
+    const [dup] = semantic
+      ? [semantic]
+      : await sql<{ id: string }[]>`
+          SELECT id FROM lessons
+          WHERE scope = 'conglomerate' AND status = 'active'
+            AND conglomerate_id = ${company.conglomerateId}
+            AND lower(text) = lower(${cand.text}) LIMIT 1`;
+
+    if (dup) {
+      await sql`UPDATE lessons SET status = 'retired', updated_at = now() WHERE id = ${cand.id}`;
+      await sql`
+        UPDATE lessons SET score = score + ${MERGE_REWARD}, wins = wins + 1,
+          last_reinforced_at = now(), updated_at = now() WHERE id = ${dup.id}`;
+      merged++;
+    } else {
+      // Start the shared-decay clock at promotion, not creation — a freshly
+      // promoted lesson is proven, so it shouldn't inherit days of back-decay.
+      await sql`
+        UPDATE lessons SET scope = 'conglomerate', company_id = NULL, source = 'promoted',
+          last_decayed_at = now(), updated_at = now()
+        WHERE id = ${cand.id}`;
+      promoted++;
+    }
+    await ledger.append({
+      companyId: company.id,
+      actor: "ceo",
+      eventType: "lesson_promoted",
+      payload: { lessonId: cand.id, text: cand.text, merged: Boolean(dup) },
+    });
+  }
+  return { promoted, merged };
+}
+
+// ── Shared-sheet maintenance: time-proportional decay + retirement ──────────
+// Company lessons decay a flat step per their own heartbeat (reinforceLessons).
+// Shared (conglomerate) lessons can't: N companies' heartbeats all hit them, so
+// a flat per-call step would decay them N× too fast. Instead decay is a function
+// of elapsed wall-clock time off last_decayed_at — score × DECAY^days — which
+// composes exactly regardless of how often (or by how many companies) it runs:
+// decaying by DECAY^Δt₁ then DECAY^Δt₂ equals DECAY^(Δt₁+Δt₂). So it's safe to
+// call on every heartbeat, and a shared tip that stops being reinforced fades to
+// the floor and retires — keeping the shared sheet self-pruning, not unbounded.
+const LESSON_DAILY_DECAY = 0.95; // multiplicative per day for shared lessons
+
+export async function decayConglomerateLessons(
+  sql: Sql,
+  ledger: Ledger,
+  conglomerateId: string,
+): Promise<{ retired: number }> {
+  await sql`
+    UPDATE lessons SET
+      score = score * power(
+        ${LESSON_DAILY_DECAY},
+        extract(epoch FROM (now() - coalesce(last_decayed_at, created_at))) / 86400.0
+      ),
+      last_decayed_at = now(),
+      updated_at = now()
+    WHERE status = 'active' AND scope = 'conglomerate' AND conglomerate_id = ${conglomerateId}`;
+
+  const retired = await sql<{ id: string }[]>`
+    UPDATE lessons SET status = 'retired', updated_at = now()
+    WHERE status = 'active' AND scope = 'conglomerate' AND conglomerate_id = ${conglomerateId}
+      AND score < ${LESSON_FLOOR}
+    RETURNING id`;
+
+  if (retired.length) {
+    await ledger.append({
+      companyId: null,
+      actor: "system",
+      eventType: "lessons_maintained",
+      payload: { conglomerateId, retiredShared: retired.length },
+    });
+  }
+  return { retired: retired.length };
 }

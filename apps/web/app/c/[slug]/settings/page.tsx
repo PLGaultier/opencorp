@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCompany } from "@/lib/data";
+import { isOwner } from "@/lib/server-auth";
 import { SettingsForm } from "./settings-form";
 
 export default async function SettingsPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  if (!(await isOwner(slug))) notFound(); // owner-only knobs (§4)
   const data = await getCompany(slug);
   if (!data) notFound();
   const { company } = data;
