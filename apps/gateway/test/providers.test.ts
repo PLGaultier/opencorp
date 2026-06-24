@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { assertPublicUrl, extractText } from "../src/providers/browser";
 import { isValidAddress, listUnsubscribeHeader } from "../src/providers/email";
-import { paymentsFor } from "../src/providers/payments";
+import { paymentsFor, isTerminalStripeError } from "../src/providers/payments";
 import { EnvSecretStore } from "../src/secrets";
 import { registry } from "../src/tools";
 import { DEFAULT_LIMITS } from "../src/ratelimit";
@@ -55,7 +55,9 @@ describe("email hygiene (§7.3)", () => {
 });
 
 describe("payments provider (§10)", () => {
-  const secrets = new EnvSecretStore();
+  // Explicit empty env (not process.env): keeps "no Stripe key → local mode"
+  // deterministic even when a real key is present in the dev shell / .env.
+  const secrets = new EnvSecretStore({});
 
   test("local mode without a Stripe key, payout returns a transfer id", async () => {
     const p = await paymentsFor("co-1", secrets, "http://cb");
@@ -72,6 +74,57 @@ describe("payments provider (§10)", () => {
     expect(paymentLink).toBe("http://cb/pay/acme/p1");
     const { transferId } = await p.payout({ amountCents: 1000, currency: "eur", destination: null });
     expect(transferId).toStartWith("local-payout:");
+  });
+});
+
+describe("stripe payout money-out (§10)", () => {
+  // A company with a Stripe key resolves to the real Stripe provider; we mock
+  // global fetch so no network is hit.
+  const stripeSecrets = new EnvSecretStore({ OPENCORP_SECRET__STRIPE_SECRET_KEY: "sk_test_x" });
+
+  test("transfer carries an Idempotency-Key keyed on the withdrawal", async () => {
+    const p = await paymentsFor("co-1", stripeSecrets, "");
+    expect(p.kind).toBe("stripe");
+
+    const calls: { url: string; headers: Headers }[] = [];
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init: { headers?: HeadersInit }) => {
+      calls.push({ url: String(url), headers: new Headers(init.headers) });
+      return new Response(JSON.stringify({ id: "tr_123" }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const { transferId } = await p.payout({
+        amountCents: 1000,
+        currency: "eur",
+        destination: "acct_1",
+        idempotencyKey: "withdrawal:w-1",
+      });
+      expect(transferId).toBe("stripe:tr_123");
+      expect(calls[0]!.url).toContain("/v1/transfers");
+      expect(calls[0]!.headers.get("idempotency-key")).toBe("withdrawal:w-1");
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  test("a 4xx rejection is terminal; a 5xx is transient (retryable)", async () => {
+    const p = await paymentsFor("co-1", stripeSecrets, "");
+    const orig = globalThis.fetch;
+
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: { message: "no such destination" } }), { status: 400 })) as typeof fetch;
+    const terminal = await p
+      .payout({ amountCents: 1000, currency: "eur", destination: "acct_x", idempotencyKey: "withdrawal:w-2" })
+      .then(() => null, (err) => err);
+    expect(isTerminalStripeError(terminal)).toBe(true);
+
+    globalThis.fetch = (async () => new Response("{}", { status: 503 })) as typeof fetch;
+    const transient = await p
+      .payout({ amountCents: 1000, currency: "eur", destination: "acct_x", idempotencyKey: "withdrawal:w-3" })
+      .then(() => null, (err) => err);
+    expect(isTerminalStripeError(transient)).toBe(false);
+
+    globalThis.fetch = orig;
   });
 });
 

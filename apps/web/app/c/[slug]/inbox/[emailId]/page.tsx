@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCompany, getEmail } from "@/lib/data";
+import { forwardCookie, isOwner } from "@/lib/server-auth";
 import { EmailActions } from "./email-actions";
 
 const dt = (iso: string) => new Date(iso).toLocaleString();
@@ -11,7 +12,8 @@ export default async function EmailPage({
   params: Promise<{ slug: string; emailId: string }>;
 }) {
   const { slug, emailId } = await params;
-  const [data, email] = await Promise.all([getCompany(slug), getEmail(slug, emailId)]);
+  if (!(await isOwner(slug))) notFound(); // owner-only (§4)
+  const [data, email] = await Promise.all([getCompany(slug), getEmail(slug, emailId, await forwardCookie())]);
   if (!data || !email) notFound();
   const { company } = data;
 

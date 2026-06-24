@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCompany, getTask } from "@/lib/data";
+import { forwardCookie, isOwner } from "@/lib/server-auth";
 import { TaskActions } from "./task-actions";
 
 const dt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
@@ -11,7 +12,8 @@ export default async function TaskPage({
   params: Promise<{ slug: string; id: string }>;
 }) {
   const { slug, id } = await params;
-  const [data, task] = await Promise.all([getCompany(slug), getTask(slug, id)]);
+  if (!(await isOwner(slug))) notFound(); // task detail is owner-only (§4)
+  const [data, task] = await Promise.all([getCompany(slug), getTask(slug, id, await forwardCookie())]);
   if (!data || !task) notFound();
 
   return (

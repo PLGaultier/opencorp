@@ -1,8 +1,8 @@
 import type postgres from "postgres";
 import type { Ledger } from "@opencorp/ledgerd";
 import type { SecretStore } from "./secrets";
-import { paymentsFor } from "./providers/payments";
-import { connectAccountFor } from "./connect";
+import { paymentsFor, isTerminalStripeError } from "./providers/payments";
+import { connectAccountFor, connectAccountReady } from "./connect";
 
 /**
  * Withdrawals / money-out (§10, §7.3). The mirror of `recordPayment`: a company
@@ -43,11 +43,33 @@ export async function processWithdrawal(
   secrets: SecretStore,
   req: WithdrawalRequest,
 ): Promise<WithdrawalResult> {
-  // 1. Reserve: guard balance and debit atomically, recording a 'processing' row.
+  const provider = await paymentsFor(req.companyId, secrets, "");
+  const destination = await connectAccountFor(sql, req.conglomerateId);
+
+  // 0. Pre-flight (Stripe mode only): the connected account must be able to
+  // receive transfers, or we'd debit the balance and then fail externally.
+  // Fail fast with a clear reason before touching any money. Local mode skips
+  // this — its payout is an in-ledger no-op. A transient API error throws (out
+  // of `connectAccountReady`) so the durable workflow retries.
+  if (provider.kind === "stripe") {
+    if (!destination) return { status: "failed", reason: "connect_not_onboarded" };
+    if (!(await connectAccountReady(secrets, destination))) {
+      return { status: "failed", reason: "connect_not_ready" };
+    }
+  }
+
+  // 1. Reserve: guard balance and debit atomically, recording a 'processing'
+  // row. A retry that finds an existing row either returns the settled outcome
+  // ('paid'/'failed') or *resumes* a 'processing' one — the transfer below is
+  // idempotent on withdrawalId, so re-driving it can't double-pay.
   const reserved = await sql.begin(async (tx) => {
     const [existing] = await tx<{ status: string; provider_transfer_id: string | null }[]>`
       SELECT status, provider_transfer_id FROM withdrawals WHERE id = ${req.withdrawalId}`;
-    if (existing) return { kind: "exists" as const, status: existing.status, transferId: existing.provider_transfer_id };
+    if (existing) {
+      if (existing.status === "paid") return { kind: "done" as const, transferId: existing.provider_transfer_id };
+      if (existing.status === "failed") return { kind: "done_failed" as const };
+      return { kind: "resume" as const }; // 'processing' — crashed mid-flight; re-drive
+    }
 
     const [c] = await tx<{ real_balance_cents: string }[]>`
       SELECT real_balance_cents FROM companies WHERE id = ${req.companyId} FOR UPDATE`;
@@ -62,10 +84,10 @@ export async function processWithdrawal(
     return { kind: "reserved" as const };
   });
 
-  if (reserved.kind === "exists") {
-    return { status: reserved.status === "paid" ? "already_done" : "failed", transferId: reserved.transferId ?? undefined };
-  }
+  if (reserved.kind === "done") return { status: "already_done", transferId: reserved.transferId ?? undefined };
+  if (reserved.kind === "done_failed") return { status: "failed", reason: "already_failed" };
   if (reserved.kind === "error") return { status: "failed", reason: reserved.reason };
+  // reserved.kind is 'reserved' (fresh) or 'resume' (re-driving) — both pay out.
 
   // 2. Pay out externally (Stripe Connect transfer, or local no-op). The
   // connected account is per *conglomerate* (one per owner): KYC + the bank
@@ -74,13 +96,12 @@ export async function processWithdrawal(
   // The owner receives the net; the platform keeps the fee (pillar 2).
   const feeCents = withdrawalFeeCents(req.amountCents);
   const netCents = req.amountCents - feeCents;
-  const destination = await connectAccountFor(sql, req.conglomerateId);
-  const provider = await paymentsFor(req.companyId, secrets, "");
   try {
     const { transferId } = await provider.payout({
       amountCents: netCents,
       currency: req.currency,
       destination,
+      idempotencyKey: `withdrawal:${req.withdrawalId}`,
     });
 
     // 3. Confirm: mark paid + money_out ledger event (gross out, fee, net paid).
@@ -111,7 +132,12 @@ export async function processWithdrawal(
     }
     return { status: "paid", transferId, feeCents, netCents };
   } catch (err) {
-    // Refund the reserve so a failed transfer never strands the balance.
+    // Only a *terminal* Stripe rejection (4xx — bad destination, capability not
+    // active, etc.) means the transfer will never land: refund the reserve so a
+    // dead withdrawal never strands the balance, and mark it failed. A transient
+    // error (5xx / network) is rethrown so the durable workflow retries — the
+    // row stays 'processing' and the idempotent re-drive can't double-pay.
+    if (!isTerminalStripeError(err)) throw err;
     await sql.begin(async (tx) => {
       await tx`UPDATE companies SET real_balance_cents = real_balance_cents + ${req.amountCents}
                WHERE id = ${req.companyId}`;

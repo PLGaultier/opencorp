@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getAnalytics, getCompany, getCompanyEvents, getCompanyTasks, getEmails, getProducts, siteUrl } from "@/lib/data";
+import { getAnalytics, getCompany, getCompanyEvents, getCompanyTasks, getEmails, getProducts, siteUrl, GITHUB_ENABLED } from "@/lib/data";
+import { forwardCookie, isOwner } from "@/lib/server-auth";
 import { CompanyControls } from "./controls";
 import { CompanyTerminal } from "./terminal";
 import { TaskComposer } from "./task-composer";
@@ -23,17 +24,25 @@ const TASK_LABEL: Record<string, string> = {
 
 export default async function CompanyPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  // §4 — a logged-out visitor sees only the public profile (P&L stats, website,
+  // products + payment link) and the public ledger. The owner sees everything.
+  const owner = await isOwner(slug);
   const data = await getCompany(slug);
   if (!data) notFound();
   const { company, tasks } = data;
 
-  const [{ companyId, events }, richTasks, emails, products, analytics] = await Promise.all([
+  // Public data (everyone): the ledger + the storefront.
+  const [{ companyId, events }, products] = await Promise.all([
     getCompanyEvents(slug),
-    getCompanyTasks(slug),
-    getEmails(slug),
     getProducts(slug),
-    getAnalytics(slug),
   ]);
+
+  // Owner-only operational data: tasks, inbox, site analytics. Skipped entirely
+  // (not just hidden) for non-owners, so it never reaches the browser.
+  const cookie = owner ? await forwardCookie() : "";
+  const [richTasks, emails, analytics] = owner
+    ? await Promise.all([getCompanyTasks(slug, cookie), getEmails(slug, undefined, cookie), getAnalytics(slug)])
+    : [[], [], { pageviews: 0, visitors: 0, sessions: 0, peakPerDay: 0 }];
   const pnl = (company.revenueCents - company.spendCents) / 100; // real revenue in minus real money spent
   const cid = companyId ?? company.id;
   const siteHref = siteUrl(slug);
@@ -63,9 +72,11 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
         <div className="company-main">
           <h1>
             {company.name} <span className={`dot ${company.status === "paused" ? "paused" : ""}`} style={{ display: "inline-block" }} />{" "}
-            <Link href={`/c/${slug}/settings`} className="sub" style={{ fontSize: "0.85rem", textDecoration: "underline" }}>
-              settings
-            </Link>
+            {owner && (
+              <Link href={`/c/${slug}/settings`} className="sub" style={{ fontSize: "0.85rem", textDecoration: "underline" }}>
+                settings
+              </Link>
+            )}
           </h1>
           <p className="sub">{company.mission}</p>
 
@@ -109,67 +120,78 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
             </a>
           </section>
 
-          {/* Tasks */}
-          <div className="tasks" style={{ marginTop: "1.5rem" }}>
-            <div className="tasks-head">
-              <h2 style={{ fontSize: "1.05rem", margin: 0 }}>Tasks</h2>
-              {taskCounts.length > 0 && (
-                <div className="task-summary">
-                  {taskCounts.map(([status, n]) => (
-                    <span className={`task-chip ${status}`} key={status}>
-                      <span className="task-dot" />
-                      {n} {TASK_LABEL[status]}
-                    </span>
-                  ))}
+          {/* Tasks — owner-only operational view (§4) */}
+          {owner && (
+            <div className="tasks" style={{ marginTop: "1.5rem" }}>
+              <div className="tasks-head">
+                <h2 style={{ fontSize: "1.05rem", margin: 0 }}>Tasks</h2>
+                {taskCounts.length > 0 && (
+                  <div className="task-summary">
+                    {taskCounts.map(([status, n]) => (
+                      <span className={`task-chip ${status}`} key={status}>
+                        <span className="task-dot" />
+                        {n} {TASK_LABEL[status]}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="tasks-action">
+                  <TaskComposer companyId={cid} />
                 </div>
-              )}
-              <div className="tasks-action">
-                <TaskComposer companyId={cid} />
               </div>
+
+              <TaskList tasks={taskList} />
             </div>
+          )}
 
-            <TaskList tasks={taskList} />
-          </div>
+          {/* Email — owner-only */}
+          {owner && <EmailPanel slug={slug} address={emailAddress} emails={emails} />}
 
-          {/* Email */}
-          <EmailPanel slug={slug} address={emailAddress} emails={emails} />
-
-          {/* Ads / outbound — locked upsell (§14, future) */}
-          <section className="panel" style={{ marginTop: "1.5rem" }}>
-            <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.75rem" }}>Ads &amp; outbound</h2>
-            <div className="locked-card">
-              <div>
-                <b>Outbound · Locked</b>
-                <p className="sub" style={{ margin: "0.2rem 0 0" }}>
-                  Automated prospect discovery and cold outreach, run by the CMO within your budget cap.
-                </p>
+          {/* Ads / outbound — locked upsell (§14, future) — owner-only */}
+          {owner && (
+            <section className="panel" style={{ marginTop: "1.5rem" }}>
+              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.75rem" }}>Ads &amp; outbound</h2>
+              <div className="locked-card">
+                <div>
+                  <b>Outbound · Locked</b>
+                  <p className="sub" style={{ margin: "0.2rem 0 0" }}>
+                    Automated prospect discovery and cold outreach, run by the CMO within your budget cap.
+                  </p>
+                </div>
+                <Link href="/credits" className="locked-cta">
+                  Unlock prospect discovery →
+                </Link>
               </div>
-              <Link href="/credits" className="locked-cta">
-                Unlock prospect discovery →
-              </Link>
-            </div>
-          </section>
+            </section>
+          )}
 
-          {/* Payments */}
+          {/* Payments — the storefront (products + payment link) is public so a
+              customer can buy; the owner-only rows below manage the account. */}
           <section className="panel" style={{ marginTop: "1.5rem" }}>
             <div className="panel-head">
               <h2 style={{ fontSize: "1.05rem", margin: 0 }}>Payments</h2>
-              <Link href={`/c/${slug}/revenue`} className="sub" style={{ fontSize: "0.82rem", textDecoration: "underline", marginLeft: "auto" }}>
-                revenue & history ↗
-              </Link>
+              {owner && (
+                <Link href={`/c/${slug}/revenue`} className="sub" style={{ fontSize: "0.82rem", textDecoration: "underline", marginLeft: "auto" }}>
+                  revenue & history ↗
+                </Link>
+              )}
             </div>
 
-            <div className="pay-balance">
-              <span className="sub">Balance</span>
-              <b>{eur(company.balanceCents)}</b>
-            </div>
+            {owner && (
+              <>
+                <div className="pay-balance">
+                  <span className="sub">Balance</span>
+                  <b>{eur(company.balanceCents)}</b>
+                </div>
 
-            <div className="pay-row">
-              <span className="pay-label">Referrals</span>
-              <code className="pay-link">{referralLink}</code>
-              <CopyButton value={referralLink} />
-              <span className="sub">0 referrals</span>
-            </div>
+                <div className="pay-row">
+                  <span className="pay-label">Referrals</span>
+                  <code className="pay-link">{referralLink}</code>
+                  <CopyButton value={referralLink} />
+                  <span className="sub">0 referrals</span>
+                </div>
+              </>
+            )}
 
             <div className="pay-row">
               <span className="pay-label">Payment link</span>
@@ -177,14 +199,18 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
               <CopyButton value={payLink} />
             </div>
 
-            <div className="pay-row">
-              <span className="pay-label">Test link</span>
-              <code className="pay-link">{testPayLink}</code>
-              <CopyButton value={testPayLink} />
-            </div>
-            <p className="sub" style={{ margin: "0.1rem 0 0" }}>
-              Pay with test card <code>4242 4242 4242 4242</code> — any future expiry, any CVC. No real charge, and it doesn&apos;t count as revenue.
-            </p>
+            {owner && (
+              <>
+                <div className="pay-row">
+                  <span className="pay-label">Test link</span>
+                  <code className="pay-link">{testPayLink}</code>
+                  <CopyButton value={testPayLink} />
+                </div>
+                <p className="sub" style={{ margin: "0.1rem 0 0" }}>
+                  Pay with test card <code>4242 4242 4242 4242</code> — any future expiry, any CVC. No real charge, and it doesn&apos;t count as revenue.
+                </p>
+              </>
+            )}
 
             <h3 style={{ fontSize: "0.9rem", margin: "1.1rem 0 0.5rem" }}>Products</h3>
             {products.length === 0 ? (
@@ -199,37 +225,41 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
                 ))}
               </div>
             )}
-            <p className="sub" style={{ margin: "0.85rem 0 0" }}>
-              <Link href="/credits" style={{ textDecoration: "underline" }}>Learn more about credits &amp; billing →</Link>
-            </p>
+            {owner && (
+              <p className="sub" style={{ margin: "0.85rem 0 0" }}>
+                <Link href="/credits" style={{ textDecoration: "underline" }}>Learn more about credits &amp; billing →</Link>
+              </p>
+            )}
           </section>
 
-          {/* Analytics */}
-          <section className="panel" style={{ marginTop: "1.5rem" }}>
-            <div className="panel-head">
-              <h2 style={{ fontSize: "1.05rem", margin: 0 }}>Analytics</h2>
-              <a href={siteUrl(slug)} target="_blank" rel="noreferrer" className="sub" style={{ fontSize: "0.82rem", textDecoration: "underline", marginLeft: "auto" }}>
-                View site ↗
-              </a>
-            </div>
-            <p className="sub" style={{ margin: "0 0 0.6rem" }}>
-              Pageviews · last 30 days {analytics.peakPerDay > 0 && <>· peak {analytics.peakPerDay} PV/day</>}
-            </p>
-            <div className="metric-row">
-              <div className="metric">
-                <b>{analytics.pageviews}</b>
-                <span className="sub">Pageviews</span>
+          {/* Analytics — owner-only */}
+          {owner && (
+            <section className="panel" style={{ marginTop: "1.5rem" }}>
+              <div className="panel-head">
+                <h2 style={{ fontSize: "1.05rem", margin: 0 }}>Analytics</h2>
+                <a href={siteUrl(slug)} target="_blank" rel="noreferrer" className="sub" style={{ fontSize: "0.82rem", textDecoration: "underline", marginLeft: "auto" }}>
+                  View site ↗
+                </a>
               </div>
-              <div className="metric">
-                <b>{analytics.visitors}</b>
-                <span className="sub">Visitors</span>
+              <p className="sub" style={{ margin: "0 0 0.6rem" }}>
+                Pageviews · last 30 days {analytics.peakPerDay > 0 && <>· peak {analytics.peakPerDay} PV/day</>}
+              </p>
+              <div className="metric-row">
+                <div className="metric">
+                  <b>{analytics.pageviews}</b>
+                  <span className="sub">Pageviews</span>
+                </div>
+                <div className="metric">
+                  <b>{analytics.visitors}</b>
+                  <span className="sub">Visitors</span>
+                </div>
+                <div className="metric">
+                  <b>{analytics.sessions}</b>
+                  <span className="sub">Sessions</span>
+                </div>
               </div>
-              <div className="metric">
-                <b>{analytics.sessions}</b>
-                <span className="sub">Sessions</span>
-              </div>
-            </div>
-          </section>
+            </section>
+          )}
 
           {/* Live ledger */}
           <section style={{ marginTop: "2rem" }}>
@@ -237,16 +267,34 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
           </section>
         </div>
 
-        {/* Right rail: engine (brains + runway) + heartbeat + CEO chat, always reachable */}
+        {/* Right rail: owner gets the engine (brains + runway) + controls; a
+            visitor gets a short note that this is the public profile. */}
         <aside className="company-side">
-          <EnginePanel
-            companyId={cid}
-            initialLevel={company.modelLevel}
-            balanceCents={company.balanceCents}
-            dailyTaskCap={company.dailyTaskCap}
-            paused={company.status === "paused"}
-          />
-          <CompanyControls companyId={cid} initialStatus={company.status} />
+          {owner ? (
+            <>
+              <EnginePanel
+                companyId={cid}
+                initialLevel={company.modelLevel}
+                balanceCents={company.balanceCents}
+                dailyTaskCap={company.dailyTaskCap}
+                paused={company.status === "paused"}
+              />
+              <CompanyControls companyId={cid} initialStatus={company.status} />
+            </>
+          ) : (
+            <section className="panel">
+              <h2 style={{ fontSize: "1.05rem", margin: "0 0 0.5rem" }}>Public profile</h2>
+              <p className="sub" style={{ margin: 0 }}>
+                You&apos;re viewing this company&apos;s public page — its P&L and every action on the
+                hash-chained ledger below. {GITHUB_ENABLED ? (
+                  <Link href="/login" style={{ textDecoration: "underline" }}>Sign in</Link>
+                ) : (
+                  "Sign in"
+                )}{" "}
+                as the owner to manage tasks, email and settings.
+              </p>
+            </section>
+          )}
         </aside>
       </div>
     </main>

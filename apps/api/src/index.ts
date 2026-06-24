@@ -26,6 +26,7 @@ import { PLANS, PgBillingStore, billingProviderFromEnv, runGrantCycle, subscribe
 import {
   auth,
   requireAuth,
+  getSessionUser,
   userCanAccessCompany,
   userConglomerateIds,
   userIsMemberOfConglomerate,
@@ -78,6 +79,22 @@ app.get("/api/me", requireAuth, async (c) => {
 const requireCompanyAccess: typeof requireAuth = async (c, next) => {
   const companyId = c.req.param("id");
   if (!companyId || !(await userCanAccessCompany(sql, c.get("userId"), companyId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  await next();
+};
+
+/**
+ * Same as requireCompanyAccess but keyed on the :slug param — for the read-only
+ * dashboard endpoints (tasks, agents, emails, payments, campaigns) that expose
+ * operational detail. A logged-out visitor or a non-owner gets 403; only the
+ * P&L summary and the public hash-chained ledger stay open to everyone (§4).
+ */
+const requireCompanyAccessBySlug: typeof requireAuth = async (c, next) => {
+  const slug = c.req.param("slug") ?? "";
+  const [co] = await sql<{ id: string }[]>`
+    SELECT id FROM companies WHERE slug = ${slug}`;
+  if (!co || !(await userCanAccessCompany(sql, c.get("userId"), co.id))) {
     return c.json({ error: "forbidden" }, 403);
   }
   await next();
@@ -143,21 +160,21 @@ app.get("/api/companies/:slug", async (c) => {
   const [row] = await sql<PnlRow[]>`
     SELECT ${PNL_COLUMNS} FROM companies c WHERE c.slug = ${c.req.param("slug")} AND c.is_public = true`;
   if (!row) return c.json({ error: "not_found" }, 404);
-  const traceCfg = traceConfigFromEnv();
-  const tasks = await sql<{ title: string; status: string; priority: number; trace_id: string | null }[]>`
-    SELECT title, status, priority, trace_id FROM tasks
-    WHERE company_id = ${row.id} AND status <> 'deleted'
-    ORDER BY priority DESC, created_at DESC LIMIT 25`;
-  return c.json({
-    company: toPnl(row),
-    // §9.2 — every task links to its full Langfuse public trace
-    tasks: tasks.map((t) => ({
-      title: t.title,
-      status: t.status,
-      priority: t.priority,
-      traceUrl: t.trace_id && traceCfg ? publicTraceUrl(traceCfg, t.trace_id) : null,
-    })),
-  });
+  // Public summary = P&L stats only (incl. aggregate task counts from
+  // PNL_COLUMNS). Task *titles* are operational detail, served owner-only by
+  // /api/companies/:slug/tasks; they are deliberately omitted here.
+  return c.json({ company: toPnl(row), tasks: [] });
+});
+
+// Does the current session own this company? Drives the dashboard's owner-only
+// panels. Never 401s — a logged-out visitor just gets { owner: false }.
+app.get("/api/companies/:slug/access", async (c) => {
+  const user = await getSessionUser(c.req.raw);
+  if (!user) return c.json({ owner: false });
+  const [co] = await sql<{ id: string }[]>`
+    SELECT id FROM companies WHERE slug = ${c.req.param("slug")}`;
+  if (!co) return c.json({ owner: false });
+  return c.json({ owner: await userCanAccessCompany(sql, user.id, co.id) });
 });
 
 // §9.2 — per-company event history (full redacted payloads) powering the
@@ -217,7 +234,7 @@ const publicCompanyId = async (slug: string) => {
   return co?.id ?? null;
 };
 
-app.get("/api/companies/:slug/tasks", async (c) => {
+app.get("/api/companies/:slug/tasks", requireAuth, requireCompanyAccessBySlug, async (c) => {
   const companyId = await publicCompanyId(c.req.param("slug"));
   if (!companyId) return c.json({ error: "not_found" }, 404);
   const traceCfg = traceConfigFromEnv();
@@ -228,7 +245,7 @@ app.get("/api/companies/:slug/tasks", async (c) => {
   return c.json({ companyId, tasks: rows.map((t) => toTask(t, traceCfg)) });
 });
 
-app.get("/api/companies/:slug/tasks/:taskId", async (c) => {
+app.get("/api/companies/:slug/tasks/:taskId", requireAuth, requireCompanyAccessBySlug, async (c) => {
   const companyId = await publicCompanyId(c.req.param("slug"));
   if (!companyId) return c.json({ error: "not_found" }, 404);
   const [row] = await sql<TaskRow[]>`
@@ -240,7 +257,7 @@ app.get("/api/companies/:slug/tasks/:taskId", async (c) => {
 
 // §16/M5 — the org chart: CEO + department agents (CMO/CTO/CFO) + workers,
 // with their recent department plans straight from the ledger.
-app.get("/api/companies/:slug/agents", async (c) => {
+app.get("/api/companies/:slug/agents", requireAuth, requireCompanyAccessBySlug, async (c) => {
   const companyId = await publicCompanyId(c.req.param("slug"));
   if (!companyId) return c.json({ error: "not_found" }, 404);
   const agents = await sql<
@@ -573,7 +590,7 @@ app.get("/api/companies/:slug/products", async (c) => {
   });
 });
 
-app.get("/api/companies/:slug/payments", async (c) => {
+app.get("/api/companies/:slug/payments", requireAuth, requireCompanyAccessBySlug, async (c) => {
   const companyId = await publicCompanyId(c.req.param("slug"));
   if (!companyId) return c.json({ error: "not_found" }, 404);
   const limit = Math.min(Number(c.req.query("limit") ?? 50), 200);
@@ -605,7 +622,7 @@ app.get("/api/companies/:slug/payments", async (c) => {
 
 // §14 — ad campaigns with this-month spend, attributed revenue and ROAS. The
 // same numbers the autonomous optimizer acts on, exposed for transparency.
-app.get("/api/companies/:slug/campaigns", async (c) => {
+app.get("/api/companies/:slug/campaigns", requireAuth, requireCompanyAccessBySlug, async (c) => {
   const companyId = await publicCompanyId(c.req.param("slug"));
   if (!companyId) return c.json({ error: "not_found" }, 404);
   const rows = await sql<
@@ -636,7 +653,7 @@ app.get("/api/companies/:slug/campaigns", async (c) => {
 // §1 feature 3 — the company's real email inbox (Stalwart JMAP). Public read
 // mirrors the tasks/agents transparency: the ledger shows what the AI sent,
 // the inbox shows what came back. Owner can mark emails read from the UI.
-app.get("/api/companies/:slug/emails", async (c) => {
+app.get("/api/companies/:slug/emails", requireAuth, requireCompanyAccessBySlug, async (c) => {
   const companyId = await publicCompanyId(c.req.param("slug"));
   if (!companyId) return c.json({ error: "not_found" }, 404);
   // Best-effort: pull any new replies from Stalwart into the mirror before
@@ -659,7 +676,7 @@ app.get("/api/companies/:slug/emails", async (c) => {
   });
 });
 
-app.get("/api/companies/:slug/emails/:emailId", async (c) => {
+app.get("/api/companies/:slug/emails/:emailId", requireAuth, requireCompanyAccessBySlug, async (c) => {
   const companyId = await publicCompanyId(c.req.param("slug"));
   if (!companyId) return c.json({ error: "not_found" }, 404);
   const [row] = await sql<

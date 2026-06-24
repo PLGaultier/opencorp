@@ -45,6 +45,25 @@ async function accountDetailsSubmitted(key: string, accountId: string): Promise<
   return Boolean(acct.details_submitted);
 }
 
+/**
+ * Can the platform transfer funds INTO this connected account right now? For
+ * separate charges & transfers (our marketplace model, §10), the account must
+ * have its `transfers` capability `active` — `details_submitted` alone isn't
+ * enough (KYC can be filed but a capability still pending review). Throws on a
+ * transient API error so the caller (a durable workflow) retries rather than
+ * mistaking a network blip for "not ready".
+ */
+export async function connectAccountReady(secrets: SecretStore, accountId: string): Promise<boolean> {
+  const key = await platformKey(secrets);
+  if (!key) return false;
+  const res = await fetch(`https://api.stripe.com/v1/accounts/${accountId}`, {
+    headers: { authorization: `Bearer ${key}` },
+  });
+  if (!res.ok) throw new Error(`stripe accounts/${accountId} read failed: ${res.status}`);
+  const acct = (await res.json()) as { capabilities?: { transfers?: string } };
+  return acct.capabilities?.transfers === "active";
+}
+
 export interface OnboardRequest {
   conglomerateId: string;
   /** Where Stripe sends the owner after finishing / to retry onboarding. */
@@ -83,7 +102,12 @@ export async function ensureConnectOnboarding(
 
   let accountId = cg.stripe_connect_account_id;
   if (!accountId) {
-    const account = await stripe(key, "accounts", { type: "express" });
+    // Request the `transfers` capability up front — without it the platform
+    // can't move funds into the account (separate charges & transfers, §10).
+    const account = await stripe(key, "accounts", {
+      type: "express",
+      "capabilities[transfers][requested]": "true",
+    });
     accountId = account.id;
     await sql`UPDATE conglomerates SET stripe_connect_account_id = ${accountId}
               WHERE id = ${req.conglomerateId}`;

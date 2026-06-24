@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCampaigns, getCompany, getPayments, getProducts } from "@/lib/data";
+import { forwardCookie, isOwner } from "@/lib/server-auth";
 import { CopyLink } from "./copy-link";
 
 const eur = (cents: number, currency = "eur") =>
@@ -12,11 +13,15 @@ const dt = (iso: string) =>
 
 export default async function RevenuePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  // Revenue history (individual sales + ad campaigns) is owner-only (§4); the
+  // public P&L lives on the company page. A non-owner gets a 404.
+  if (!(await isOwner(slug))) notFound();
+  const cookie = await forwardCookie();
   const [data, products, { summary, payments }, campaigns] = await Promise.all([
     getCompany(slug),
     getProducts(slug),
-    getPayments(slug),
-    getCampaigns(slug),
+    getPayments(slug, cookie),
+    getCampaigns(slug, cookie),
   ]);
   if (!data) notFound();
   const { company } = data;
