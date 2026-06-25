@@ -14,9 +14,13 @@
 export const DESIGN_SYSTEM_FILENAME = "design-system.css";
 
 /** Bump when the CSS changes so caches and audits can tell versions apart. */
-export const DESIGN_SYSTEM_VERSION = "1.1.0";
+export const DESIGN_SYSTEM_VERSION = "1.2.0";
 
 export const DESIGN_SYSTEM_CSS = `/* OpenCorp design system v${DESIGN_SYSTEM_VERSION} — house style (Marc Lou rules). Do not redefine tokens; use the classes. */
+/* Self-hosted Inter (OFL) — the house typeface, served at the site root so pages
+   look the same on every OS (no CDN, no external request). */
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap; src: url("font-400.ttf") format("truetype"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 700; font-display: swap; src: url("font-700.ttf") format("truetype"); }
 :root {
   /* Colors — max 4 roles (Marc: "colors are like beers, messy after 3-4").
      Never pure black; zinc/night tones. One CTA color only. */
@@ -47,7 +51,7 @@ export const DESIGN_SYSTEM_CSS = `/* OpenCorp design system v${DESIGN_SYSTEM_VER
   --gap-section: clamp(96px, 18vw, 256px); /* section -> section (big breathing room) */
 
   /* Type — H1 60 / H2 48 desktop, fluid down to mobile; body 16, leading 1.7. */
-  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --h1: clamp(2rem, 6vw, 3.75rem);    /* 32 -> 60px */
   --h2: clamp(1.75rem, 4.5vw, 3rem);  /* 28 -> 48px */
   --h3: 1.5rem;
@@ -117,8 +121,23 @@ p strong, p b, .emphasis { color: var(--base-content); font-weight: 600; }
 .mt-button { margin-top: var(--gap-button); }
 .mt-image { margin-top: var(--gap-image); }
 
-/* Hero — one headline, one sub, one CTA, centered, generous space, soft glow. */
-.hero { text-align: center; position: relative; background: var(--hero-glow); }
+/* Hero — one headline, one sub, one CTA, centered, generous space. Visual
+   richness is automatic: the soft tinted glow, two blurred colour orbs, and a
+   faint dot grid mean even a text-only hero looks designed (no images needed). */
+.hero { text-align: center; position: relative; isolation: isolate; overflow: hidden; background: var(--hero-glow); }
+.hero > .container { position: relative; z-index: 1; }
+.hero::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(color-mix(in srgb, var(--base-content) 8%, transparent) 1px, transparent 1px);
+  background-size: 22px 22px; -webkit-mask-image: radial-gradient(70% 60% at 50% 30%, #000 30%, transparent 75%); mask-image: radial-gradient(70% 60% at 50% 30%, #000 30%, transparent 75%);
+}
+.hero::after {
+  content: ""; position: absolute; z-index: -1; pointer-events: none;
+  top: -20%; left: 50%; width: min(900px, 120%); height: 520px; transform: translateX(-50%); filter: blur(60px); opacity: .5;
+  background:
+    radial-gradient(40% 50% at 30% 40%, color-mix(in srgb, var(--primary) 45%, transparent), transparent 70%),
+    radial-gradient(40% 50% at 70% 35%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 70%);
+}
 .hero .sub { font-size: 1.25rem; max-width: 40ch; margin-inline: auto; margin-top: var(--gap-headline); }
 .hero .btn { margin-top: var(--gap-button); }
 
@@ -222,8 +241,48 @@ p strong, p b, .emphasis { color: var(--base-content); font-weight: 600; }
 .founder img { width: 72px; height: 72px; border-radius: 999px; object-fit: cover; flex-shrink: 0; }
 @media (max-width: 560px) { .founder { flex-direction: column; } }
 
+/* ── Visuals & icons v1.2 (no images / no paid APIs needed) ──────────────────
+   Icons come from the house sprite (icons.svg, dropped into every site):
+     <svg class="icon"><use href="icons.svg#zap"/></svg>
+   Stroke + size + colour live here so an icon always matches its text. */
+.icon {
+  width: 1.25em; height: 1.25em; display: inline-block; vertical-align: -0.18em;
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+/* Feature card with a tinted icon badge — the cheapest way to de-blandify a
+   row of text cards. <div class="card feature"><span class="feature-icon">
+   <svg class="icon"><use href="icons.svg#zap"/></svg></span><h3>…</h3><p>…</p></div> */
+.feature-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; border-radius: var(--radius-sm); margin-bottom: var(--space-3);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--base-100));
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+}
+.feature-icon .icon { width: 24px; height: 24px; }
+
+/* Decorative gradient blob — drop one behind a section for soft colour.
+   <div class="blob"></div> inside a position:relative section. */
+.blob {
+  position: absolute; z-index: 0; width: 420px; height: 420px; border-radius: 50%;
+  filter: blur(80px); opacity: .35; pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--primary) 60%, transparent), transparent 70%);
+}
+.blob--accent { background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent) 55%, transparent), transparent 70%); }
+
+/* Alternating sections get a faint top-down tint so the page has rhythm even
+   without imagery. */
+.section--alt { background: linear-gradient(180deg, var(--base-200), color-mix(in srgb, var(--base-200) 40%, var(--base-100))); }
+
+/* Inline-SVG hero art the agent can emit (abstract shapes, no photos). */
+.hero-art { margin-top: var(--gap-image); margin-inline: auto; max-width: 720px; }
+.hero-art svg { width: 100%; height: auto; filter: drop-shadow(var(--shadow-lg)); }
+
 /* Utilities */
 .text-center { text-align: center; }
+.text-center > p { margin-inline: auto; }   /* centered blocks: keep the capped <p> centered */
 .muted { color: var(--base-content-secondary); }
 .pill { display: inline-block; background: var(--base-200); border: 1px solid var(--base-300); color: var(--base-content-secondary); padding: 4px 12px; border-radius: 999px; font-size: .85rem; }
 `;

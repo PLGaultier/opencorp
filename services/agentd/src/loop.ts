@@ -52,11 +52,16 @@ Respond ONLY with JSON: {"thought": "...", "action": {"server": "...", "tool": "
 or to finish: {"thought": "...", "action": {"final": "summary of what was accomplished"}}
 
 Web design (when you deploy_site):
-- The house design system is auto-included at design-system.css. Add <link rel="stylesheet" href="design-system.css"> to every page and BUILD WITH ITS CLASSES — do not write your own colors/spacing or large inline <style> blocks.
-- Use the components: .container, .section (+ .section--alt), .hero, .btn (.btn--lg), .card, .grid (.grid--2/3), .testimonial, .price, .faq, .nav, .footer. Use .stack and the .mt-headline/.mt-button/.mt-image gaps for spacing.
-- Follow the rules: one headline per section; pair it with one paragraph/one image/one button; left-aligned body text; only ONE primary CTA color (the .btn); generous whitespace between sections; keep paragraphs short.
-- Good page order: hero -> problem -> solution/features -> social proof -> pricing -> FAQ -> final CTA.
-- Make it appealing (these lift conversions a lot): highlight ONE keyword in the H1 with <span class="highlight">word</span> (or .text-gradient); under the hero CTA add a <p class="reassure"> line ("No card required"); show a .social-proof row with .stars + a real "Loved by N users" count (omit .avatars unless you have REAL user photos — never use placeholder/fake faces); frame any product screenshot in .app-frame; use .stats for big numbers, .badge for "Featured on"/awards, and mark the recommended plan with .card--featured + a .ribbon.
+- The house design system is auto-included at design-system.css. Add <link rel="stylesheet" href="design-system.css"> to every page and BUILD WITH ITS CLASSES. NEVER write inline style="..." attributes, hardcode colors/px, or ship <style> blocks — if a class seems missing, get as close as you can with existing classes. Pages with inline styles look off-brand and get flagged.
+- Layout classes (use the EXACT names): .container .section .section--alt .hero .btn .btn--lg .btn--ghost .card .grid plus .grid--2 (two columns) OR .grid--3 (three columns). There is NO "grid--2/3" class — pick .grid--2 or .grid--3. Spacing: .stack, .mt-headline, .mt-button, .mt-image.
+- EVERY page must have visuals — it must never be a wall of text. You cannot use photos (no image APIs), so use these instead:
+  - Icons: the sprite icons.svg is auto-included. Use <svg class="icon"><use href="icons.svg#NAME"/></svg>. Available NAMEs: zap, sparkles, shield, check, check-circle, star, clock, heart, trending-up, lock, globe, mail, package, users. Give each feature card an icon badge: <div class="card feature"><span class="feature-icon"><svg class="icon"><use href="icons.svg#zap"/></svg></span><h3>…</h3><p>…</p></div>.
+  - Hero illustration: emit an INLINE <svg> (abstract shapes/gradients, not a photo) inside <div class="hero-art">…</div>. Keep it simple and on-palette (use currentColor or the CSS vars).
+  - Soft colour: drop a <div class="blob"></div> (or .blob--accent) inside a position:relative section for ambient gradient.
+  - Auto-added on deploy (don't build these yourself): the Inter font, and a branded social share image (og.png) with its og:image/twitter meta. Just write a normal <title> and <meta name="description">.
+- Follow the rules: one headline per section; left-aligned body text; only ONE primary CTA color (the .btn); generous whitespace between sections; keep paragraphs short (≤3 sentences).
+- Required page order: hero -> problem -> solution/features (icon cards) -> social proof -> pricing -> FAQ -> final CTA. Include at least 4 of these sections and repeat the primary CTA at top and bottom.
+- Appeal boosters (use several): highlight ONE keyword in the H1 with <span class="highlight">word</span> (or .text-gradient); a <p class="reassure"> line under the hero CTA; a .social-proof row with .stars + a real "Loved by N users" count (omit .avatars unless you have REAL user photos — never fake faces); frame product screenshots in .app-frame; .stats for big numbers; .badge for "Featured on"/awards; mark the recommended plan with .card--featured + a .ribbon.
 
 Rules:
 - You have a hard step budget shown in the task header. Treat it as real: finish with what you have before running out.
