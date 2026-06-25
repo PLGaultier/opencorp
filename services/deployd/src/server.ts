@@ -5,6 +5,8 @@ import { existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { renderLanding } from "./template";
 import { publishSite, sitesDir } from "./publish";
+import { renderOgPng, OG_FILENAME } from "./og";
+import { sanitizeSiteHtml } from "./lint";
 
 /** deployd HTTP API — called by Temporal activities (and later web-mcp). */
 
@@ -77,15 +79,25 @@ app.post("/deploy/landing", async (c) => {
   const body = DeployLanding.safeParse(await c.req.json());
   if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
   const d = body.data;
-  const html = renderLanding({
+  const files: Record<string, string | Uint8Array> = {};
+  // Branded share card (best-effort — a render hiccup must not block the deploy).
+  let ogImageUrl: string | undefined;
+  try {
+    files[OG_FILENAME] = renderOgPng({ title: d.companyName, subtitle: d.copy.subheadline });
+    ogImageUrl = `${siteUrl(d.slug)}${OG_FILENAME}`;
+  } catch (err) {
+    console.warn(`og render failed for ${d.slug}:`, err instanceof Error ? err.message : err);
+  }
+  files["index.html"] = renderLanding({
     companyName: d.companyName,
     slug: d.slug,
     emailAddress: d.emailAddress,
     umamiSiteId: d.umamiSiteId,
     umamiUrl: process.env.UMAMI_URL,
     copy: d.copy,
+    ogImageUrl,
   });
-  const { root } = await publishSite({ slug: d.slug, files: { "index.html": html } });
+  const { root } = await publishSite({ slug: d.slug, files });
   return c.json({ ok: true, root, url: siteUrl(d.slug) });
 });
 
@@ -114,7 +126,33 @@ app.post("/deploy/files", async (c) => {
     .object({ slug: z.string(), files: z.record(z.string()) })
     .safeParse(await c.req.json());
   if (!body.success) return c.json({ error: "invalid_input", detail: body.error.message }, 400);
-  const { root } = await publishSite(body.data);
+  const { slug, files: incoming } = body.data;
+
+  // Render a share card from the homepage's title + description, then sanitize
+  // each page (fix drift, guarantee the stylesheet, wire og:image). Best-effort.
+  const out: Record<string, string | Uint8Array> = {};
+  let ogImageUrl: string | undefined;
+  const home = incoming["index.html"];
+  if (home) {
+    const title = (home.match(/<title>([^<]*)<\/title>/i)?.[1] ?? slug).trim();
+    const desc = (home.match(/<meta\s+name=["']description["']\s+content=["']([^"']*)["']/i)?.[1] ?? "").trim();
+    try {
+      out[OG_FILENAME] = renderOgPng({ title, subtitle: desc || title });
+      ogImageUrl = `${siteUrl(slug)}${OG_FILENAME}`;
+    } catch (err) {
+      console.warn(`og render failed for ${slug}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  for (const [rel, content] of Object.entries(incoming)) {
+    if (rel.toLowerCase().endsWith(".html")) {
+      const { html, warnings } = sanitizeSiteHtml(content, { ogImageUrl });
+      if (warnings.length) console.log(`deploy ${slug}/${rel}: ${warnings.join("; ")}`);
+      out[rel] = html;
+    } else {
+      out[rel] = content;
+    }
+  }
+  const { root } = await publishSite({ slug, files: out });
   return c.json({ ok: true, root });
 });
 

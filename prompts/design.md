@@ -80,6 +80,11 @@ APIs, so lean on these (all free, all in the design system):
 - **Ambient colour** — drop a `<div class="blob">` / `.blob--accent` in a
   `position:relative` section for a soft gradient.
 - The agent never hardcodes colours/spacing and never uses `style="…"` inline.
+- **Automatic on deploy** (don't build these): the self-hosted **Inter** font, a
+  branded **social share image** (`og.png` + og/twitter meta) rendered from the
+  `<title>` + description, and a publish-time linter that fixes the stylesheet
+  link + malformed `grid--N/M` classes. Just write a clean `<title>` and
+  `<meta name="description">`.
 
 ## Components available
 `.container` `.site-header` `.nav` `.section` `.section--alt` `.hero` `.btn` `.btn--lg`

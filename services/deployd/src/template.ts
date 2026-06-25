@@ -17,6 +17,8 @@ export interface LandingInput {
   copy: LandingCopy;
   umamiSiteId?: string;
   umamiUrl?: string;
+  /** Absolute URL of the generated share card (og.png), if one was rendered. */
+  ogImageUrl?: string;
 }
 
 const esc = (s: string) =>
@@ -67,6 +69,16 @@ export function renderLanding(input: LandingInput): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(input.companyName)}</title>
 <meta name="description" content="${esc(copy.subheadline)}">
+<meta property="og:title" content="${esc(input.companyName)}">
+<meta property="og:description" content="${esc(copy.subheadline)}">
+<meta property="og:type" content="website">${
+    input.ogImageUrl
+      ? `
+<meta property="og:image" content="${esc(input.ogImageUrl)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${esc(input.ogImageUrl)}">`
+      : ""
+  }
 <link rel="stylesheet" href="design-system.css">
 ${umami}
 </head>

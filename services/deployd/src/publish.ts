@@ -2,6 +2,7 @@ import { mkdir, writeFile, rename } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { DESIGN_SYSTEM_CSS, DESIGN_SYSTEM_FILENAME } from "./design-system";
 import { ICON_SPRITE, ICON_SPRITE_FILENAME } from "./icons";
+import { FONT_FILES } from "./assets";
 
 /**
  * Publishes a static site into the directory Caddy serves per subdomain:
@@ -17,7 +18,7 @@ import { ICON_SPRITE, ICON_SPRITE_FILENAME } from "./icons";
 
 export interface PublishInput {
   slug: string;
-  files: Record<string, string>; // relative path -> content
+  files: Record<string, string | Uint8Array>; // relative path -> text or bytes
 }
 
 export function sitesDir(): string {
@@ -29,19 +30,22 @@ export async function publishSite(input: PublishInput): Promise<{ root: string }
     throw new Error(`invalid slug: ${input.slug}`);
   }
   const root = join(sitesDir(), input.slug);
-  // The house design system + icon sprite are always ours — overwrite any
-  // agent-supplied copy so every page inherits the same tokens and icons.
-  const files: Record<string, string> = {
+  // The house design system, icon sprite and fonts are always ours — overwrite
+  // any agent-supplied copy so every page inherits the same tokens, icons and
+  // typeface.
+  const files: Record<string, string | Uint8Array> = {
     ...input.files,
     [DESIGN_SYSTEM_FILENAME]: DESIGN_SYSTEM_CSS,
     [ICON_SPRITE_FILENAME]: ICON_SPRITE,
+    ...FONT_FILES,
   };
   for (const [rel, content] of Object.entries(files)) {
     if (rel.includes("..")) throw new Error(`path escape: ${rel}`);
     const target = join(root, rel);
     await mkdir(dirname(target), { recursive: true });
     const tmp = `${target}.tmp-${process.pid}`;
-    await writeFile(tmp, content, "utf8");
+    // writeFile handles a string (utf8) or raw bytes (fonts, the PNG card).
+    await writeFile(tmp, content);
     await rename(tmp, target);
   }
   return { root };

@@ -11,6 +11,7 @@
     "start": "bun src/server.ts"
   },
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "hono": "^4.6.0",
     "zod": "^3.24.0"
   }

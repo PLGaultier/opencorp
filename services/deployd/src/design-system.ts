@@ -17,6 +17,10 @@ export const DESIGN_SYSTEM_FILENAME = "design-system.css";
 export const DESIGN_SYSTEM_VERSION = "1.2.0";
 
 export const DESIGN_SYSTEM_CSS = `/* OpenCorp design system v${DESIGN_SYSTEM_VERSION} — house style (Marc Lou rules). Do not redefine tokens; use the classes. */
+/* Self-hosted Inter (OFL) — the house typeface, served at the site root so pages
+   look the same on every OS (no CDN, no external request). */
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap; src: url("font-400.ttf") format("truetype"); }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 700; font-display: swap; src: url("font-700.ttf") format("truetype"); }
 :root {
   /* Colors — max 4 roles (Marc: "colors are like beers, messy after 3-4").
      Never pure black; zinc/night tones. One CTA color only. */
@@ -47,7 +51,7 @@ export const DESIGN_SYSTEM_CSS = `/* OpenCorp design system v${DESIGN_SYSTEM_VER
   --gap-section: clamp(96px, 18vw, 256px); /* section -> section (big breathing room) */
 
   /* Type — H1 60 / H2 48 desktop, fluid down to mobile; body 16, leading 1.7. */
-  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --h1: clamp(2rem, 6vw, 3.75rem);    /* 32 -> 60px */
   --h2: clamp(1.75rem, 4.5vw, 3rem);  /* 28 -> 48px */
   --h3: 1.5rem;
