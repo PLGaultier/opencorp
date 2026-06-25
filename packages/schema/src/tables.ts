@@ -49,6 +49,8 @@ export const creditReason = pgEnum("credit_reason", [
   "task_refund",
   "referral",
   "adjustment",
+  // §10 self-financing: a company's earned revenue converted to LLM credits 1:1.
+  "revenue_reinvest",
 ]);
 export const emailDirection = pgEnum("email_direction", ["in", "out"]);
 export const membershipRole = pgEnum("membership_role", ["owner", "admin", "member"]);

@@ -29,6 +29,7 @@ import {
   promoteCompanyLessons,
   reinforceLessons,
 } from "./ceo";
+import { reinvestRevenue } from "./reinvest";
 
 /** TaskRun + CompanyHeartbeat activities (§5.2, §5.3). */
 
@@ -36,6 +37,9 @@ const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp";
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3004";
 const GATEWAY_SECRET = process.env.GATEWAY_SECRET ?? "dev-gateway-secret";
+// Dashboard origin, so owner-facing briefs can deep-link to /credits (top-up).
+// Mirrors the API's WEB_ORIGIN default.
+const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
 
 const sql = postgres(DATABASE_URL, { max: 5 });
 const ledger = new Ledger(new PgStore(DATABASE_URL));
@@ -297,12 +301,22 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
     };
   }
 
+  // §10 self-financing (FINANCING_PLAN.md Phase 2): before deciding whether we
+  // can afford to plan, let a company that has earned revenue refill its shared
+  // credit wallet (1:1) when it's running low. This closes the loop — a selling
+  // company refinances itself instead of freezing the moment its grant is spent.
+  // Best-effort: a reinvest hiccup must never break the heartbeat.
+  const reinvested = await reinvestRevenue(sql, ledger, company.conglomerateId).catch(
+    () => ({ movedCents: 0, sources: [] }),
+  );
+
   // §10 cost guard: a conglomerate that can't fund even one task (balance below a
   // single task's up-front hold) gains nothing from the paid planning fan-out —
   // applyCeoPlan wouldn't queue anything anyway. But the C-suite + distiller LLM
   // calls are NOT credit-charged, so without this they'd keep burning the platform
   // API key every heartbeat for a frozen company (the main multi-tenant exposure).
-  // Skip the whole fan-out and tell the owner to top up.
+  // Skip the whole fan-out and tell the owner to top up. (Runs after the reinvest
+  // above, so a company that just refinanced itself reads the topped-up balance.)
   const planningFunds = await creditBalance(company.conglomerateId);
   if (planningFunds < DEFAULT_TASK_ESTIMATE_CENTS) {
     await ledger.append({
@@ -312,8 +326,16 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
       payload: { skipped: "insufficient_credits", balance: planningFunds, promptHash: hash },
     });
     return {
-      userBrief: `Out of credits (balance ${planningFunds}) — autonomous planning is paused to avoid spend. Top up to resume work.`,
+      userBrief: `Out of credits (balance ${planningFunds}) — autonomous planning is paused to avoid spend. Top up at ${WEB_ORIGIN}/credits to resume work.`,
     };
+  }
+  if (reinvested.movedCents > 0) {
+    await ledger.append({
+      companyId,
+      actor: "ceo",
+      eventType: "ceo_plan",
+      payload: { reinvestedCents: reinvested.movedCents, balance: planningFunds, promptHash: hash, note: "self_financed" },
+    });
   }
 
   const cfg = llmConfigFromEnv();

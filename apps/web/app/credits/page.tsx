@@ -40,6 +40,7 @@ const REASON_LABELS: Record<string, string> = {
   task_refund: "Task refunds",
   referral: "Referral bonus",
   adjustment: "Adjustments",
+  revenue_reinvest: "Self-financed (revenue)",
 };
 
 const dt = (iso: string) =>
