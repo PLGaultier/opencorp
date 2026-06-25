@@ -1,6 +1,7 @@
 import { mkdir, writeFile, rename } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { DESIGN_SYSTEM_CSS, DESIGN_SYSTEM_FILENAME } from "./design-system";
+import { ICON_SPRITE, ICON_SPRITE_FILENAME } from "./icons";
 
 /**
  * Publishes a static site into the directory Caddy serves per subdomain:
@@ -28,8 +29,13 @@ export async function publishSite(input: PublishInput): Promise<{ root: string }
     throw new Error(`invalid slug: ${input.slug}`);
   }
   const root = join(sitesDir(), input.slug);
-  // The house design system is always ours — overwrite any agent-supplied copy.
-  const files: Record<string, string> = { ...input.files, [DESIGN_SYSTEM_FILENAME]: DESIGN_SYSTEM_CSS };
+  // The house design system + icon sprite are always ours — overwrite any
+  // agent-supplied copy so every page inherits the same tokens and icons.
+  const files: Record<string, string> = {
+    ...input.files,
+    [DESIGN_SYSTEM_FILENAME]: DESIGN_SYSTEM_CSS,
+    [ICON_SPRITE_FILENAME]: ICON_SPRITE,
+  };
   for (const [rel, content] of Object.entries(files)) {
     if (rel.includes("..")) throw new Error(`path escape: ${rel}`);
     const target = join(root, rel);

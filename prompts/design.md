@@ -67,9 +67,24 @@ These punch above their weight — use them:
 - Soft shadows, the sticky blurred header (`.site-header`), and the hero glow are
   automatic — don't fight them.
 
+## Visuals without photos (no image APIs)
+Every page needs visual anchors — never ship a wall of text. We don't use photo
+APIs, so lean on these (all free, all in the design system):
+- **Icons** — the sprite `icons.svg` is dropped into every site. Reference an icon
+  with `<svg class="icon"><use href="icons.svg#zap"/></svg>`. Ids: `zap` `sparkles`
+  `shield` `check` `check-circle` `star` `clock` `heart` `trending-up` `lock`
+  `globe` `mail` `package` `users`. Give each feature card an icon badge:
+  `<div class="card feature"><span class="feature-icon"><svg class="icon"><use href="icons.svg#zap"/></svg></span><h3>…</h3><p>…</p></div>`.
+- **Hero art** — emit an inline `<svg>` of abstract shapes (no photo) in
+  `<div class="hero-art">`. The hero already has an automatic glow + orbs + dot grid.
+- **Ambient colour** — drop a `<div class="blob">` / `.blob--accent` in a
+  `position:relative` section for a soft gradient.
+- The agent never hardcodes colours/spacing and never uses `style="…"` inline.
+
 ## Components available
 `.container` `.site-header` `.nav` `.section` `.section--alt` `.hero` `.btn` `.btn--lg`
 `.btn--ghost` `.card` `.card--featured` `.ribbon` `.grid` `.grid--2` `.grid--3`
 `.highlight` `.text-gradient` `.badge` `.social-proof` `.avatars` `.avatar` `.stars`
 `.reassure` `.stats` `.stat` `.app-frame` `.testimonial` `.price` `.founder` `.faq`
-`.footer` `.pill` `.stack` `.mt-headline` `.mt-button` `.mt-image`.
+`.footer` `.pill` `.stack` `.mt-headline` `.mt-button` `.mt-image` `.icon`
+`.feature` `.feature-icon` `.blob` `.blob--accent` `.hero-art`.

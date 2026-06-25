@@ -22,26 +22,41 @@ export interface LandingInput {
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
+// House icons (from icons.svg, dropped into every site by publishSite) cycled
+// across the feature cards so a text-only first site still has visual anchors.
+const FEATURE_ICONS = ["zap", "shield", "sparkles", "trending-up", "heart", "package"];
+const icon = (id: string) => `<svg class="icon"><use href="icons.svg#${id}"/></svg>`;
+
 export function renderLanding(input: LandingInput): string {
   const { copy } = input;
   const umami =
     input.umamiSiteId && input.umamiUrl
       ? `<script defer src="${esc(input.umamiUrl)}/script.js" data-website-id="${esc(input.umamiSiteId)}"></script>`
       : "";
-  // Each section: one headline + one paragraph (Marc's "one headline per
-  // section"), alternating background for rhythm. All spacing comes from the
-  // design-system tokens — no inline styles here.
-  const sections = copy.sections
+  // Features render as a grid of icon cards (Marc's "pair a headline with one
+  // image" — here the icon is the image). 2-up by default, 3-up when there are
+  // exactly three. All spacing/colour from the design-system tokens — no inline
+  // styles. The icon badge is what lifts this above a wall of text.
+  const cols = copy.sections.length === 3 ? "grid--3" : "grid--2";
+  const cards = copy.sections
     .map(
       (s, i) => `
-  <section class="section${i % 2 === 1 ? " section--alt" : ""}">
-    <div class="container stack">
-      <h2>${esc(s.title)}</h2>
-      <p>${esc(s.body)}</p>
-    </div>
-  </section>`,
+      <div class="card feature">
+        <span class="feature-icon">${icon(FEATURE_ICONS[i % FEATURE_ICONS.length]!)}</span>
+        <h3>${esc(s.title)}</h3>
+        <p>${esc(s.body)}</p>
+      </div>`,
     )
-    .join("\n");
+    .join("");
+  const sections = copy.sections.length
+    ? `
+  <section class="section section--alt">
+    <div class="container">
+      <div class="grid ${cols}">${cards}
+      </div>
+    </div>
+  </section>`
+    : "";
   const contact = input.emailAddress
     ? `<a class="btn btn--lg" href="mailto:${esc(input.emailAddress)}">${esc(copy.cta)}</a>`
     : `<a class="btn btn--lg" href="#contact">${esc(copy.cta)}</a>`;
@@ -67,12 +82,20 @@ ${umami}
 <main>
   <section class="section hero">
     <div class="container">
-      <h1>${esc(copy.headline)}</h1>
+      <span class="badge">${icon("sparkles")} Autonomous company</span>
+      <h1 class="mt-headline">${esc(copy.headline)}</h1>
       <p class="sub">${esc(copy.subheadline)}</p>
       ${contact}
     </div>
   </section>
   ${sections}
+  <section class="section">
+    <div class="container text-center stack">
+      <h2>${esc(copy.cta)}</h2>
+      <p>${esc(copy.subheadline)}</p>
+      ${contact}
+    </div>
+  </section>
 </main>
 <footer class="footer">
   <div class="container">
