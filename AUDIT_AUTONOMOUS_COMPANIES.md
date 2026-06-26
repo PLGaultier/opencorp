@@ -66,7 +66,7 @@ company's code with zero isolation (combines with F1).
 - **Effort:** low. Refuse `local`/`subprocess` when `NODE_ENV=production` unless
   explicitly opted in; log the chosen kind loudly at boot.
 
-### F3 · Rate limiter is in-memory, per-instance, volatile — MED
+### F3 · Rate limiter is in-memory, per-instance, volatile — MED ✅ FIXED
 `apps/gateway/src/ratelimit.ts:59-60` (acknowledged in the comment). Every gateway
 restart/deploy resets all hour/day tool caps, and they aren't shared across
 instances. So `create_campaign` (20/day), `send_email` (100/day), `deploy_site`,
@@ -133,8 +133,14 @@ the real code paths):
 - **F4** — `execute_sql` blocks `DROP` / `TRUNCATE` / `ALTER…DROP`
   (`isDestructiveSql`, comment- and multi-statement-aware); routine DML/DDL still
   runs.
+- **F3** — the rate limiter is now Postgres-backed (`PgRateLimiter` +
+  `rate_limit_hits` table, migration 0014), so per-tool caps survive gateway
+  restarts and are shared across instances instead of resetting in memory.
+  Verified: the 3rd `update_mission` call blocks (3/2) and a brand-new limiter
+  instance still blocks the 4th (4/2) — the count is durable.
 
-Still open: F3 (durable rate limiter), F5, F6, F7.
+Still open: F5 (`get_deploy_status` hardcoded), F6 (local checkout double-count),
+F7 (aggregated insight view → tickets #3/#4).
 
 ## Recommendation
 

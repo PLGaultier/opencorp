@@ -242,6 +242,23 @@ export const creditEntries = pgTable(
   (t) => [index("credit_entries_cap_idx").on(t.conglomerateId, t.createdAt)],
 );
 
+// ── Rate-limit hits: durable sliding-window counter (§7.2) ──────────────────
+// One row per write-tool call, counted within the hour/day windows. Backing the
+// limiter with Postgres (not in-process memory) makes it survive gateway
+// restarts and shared across instances — and adds no new dependency, per the
+// local MVP's minimal-deps rule. No FK: this is high-churn ephemeral data; rows
+// past the widest window are pruned on write.
+export const rateLimitHits = pgTable(
+  "rate_limit_hits",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    companyId: uuid("company_id").notNull(),
+    tool: text("tool").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("rate_limit_hits_idx").on(t.companyId, t.tool, t.createdAt)],
+);
+
 // ── Transparency ledger: append-only hash chain (§9) ───────────────────────
 export const ledgerEvents = pgTable(
   "ledger_events",

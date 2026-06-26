@@ -5,7 +5,7 @@ import { z } from "zod";
 import { Ledger, PgStore } from "@opencorp/ledgerd";
 import { verifyToken } from "@opencorp/mcp-client";
 import { registry, type ToolContext } from "./tools";
-import { MemoryRateLimiter } from "./ratelimit";
+import { PgRateLimiter } from "./ratelimit";
 import { secretStoreFromEnv, infisicalEnv, InfisicalClient, InfisicalAdmin } from "./secrets";
 import { makeBrowser } from "./providers/browser";
 import { recordPayment } from "./revenue";
@@ -37,7 +37,7 @@ export function createGateway(opts?: {
   const poolMax = opts?.poolMax ?? Number(process.env.GATEWAY_PG_POOL ?? 10);
   const sql = postgres(databaseUrl, { max: poolMax });
   const ledger = new Ledger(new PgStore(databaseUrl, poolMax));
-  const limiter = new MemoryRateLimiter();
+  const limiter = new PgRateLimiter(sql);
   const secrets = secretStoreFromEnv();
   const browser = makeBrowser();
   // The gateway serves the local checkout page itself (it owns the DB + ledger
@@ -88,7 +88,7 @@ export function createGateway(opts?: {
     const def = registry[server]?.[tool];
     if (!def) return c.json({ error: "unknown_tool", server, tool }, 404);
 
-    const limited = def.write ? limiter.check(scope.companyId, tool) : null;
+    const limited = def.write ? await limiter.check(scope.companyId, tool) : null;
     if (limited) {
       await ledger.append({
         companyId: scope.companyId,
