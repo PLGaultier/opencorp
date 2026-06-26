@@ -91,12 +91,12 @@ but it's silent data loss.
 - **Effort:** low–med. Block destructive DDL, or route it through the gate, or
   snapshot before write.
 
-### F5 · `get_deploy_status` always returns `{ live: true }` — LOW
+### F5 · `get_deploy_status` always returns `{ live: true }` — LOW ✅ FIXED
 `apps/gateway/src/tools.ts:297-304`. Hardcoded; never asks deployd. Agents get
 false confidence a deploy succeeded and skip retry/verify.
 - **Effort:** low. Probe deployd / the URL and report the real status.
 
-### F6 · Local checkout double-counts on form resubmit — LOW (dev only)
+### F6 · Local checkout double-counts on form resubmit — LOW (dev only) ✅ FIXED
 `apps/gateway/src/app.ts:289`. Each POST mints a fresh
 `local:checkout:<uuid>` providerRef, so refreshing the "Pay" page records a new
 sale every time. The Stripe path is idempotent on event id; only the dev checkout
@@ -138,9 +138,15 @@ the real code paths):
   restarts and are shared across instances instead of resetting in memory.
   Verified: the 3rd `update_mission` call blocks (3/2) and a brand-new limiter
   instance still blocks the 4th (4/2) — the count is durable.
+- **F5** — `get_deploy_status` now probes deployd `/exists` and reports the real
+  state (`live:false` when nothing is published, or when deployd is unreachable)
+  instead of always claiming `live:true`.
+- **F6** — the local checkout carries a per-page-load nonce in the form, so a
+  refresh / double-submit re-POSTs the same `providerRef` and `recordPayment`
+  dedups. Verified: a double-submit records once (2 rows, not 3; balance
+  unchanged), a fresh page load still sells.
 
-Still open: F5 (`get_deploy_status` hardcoded), F6 (local checkout double-count),
-F7 (aggregated insight view → tickets #3/#4).
+Still open: F7 (aggregated insight view → tickets #3/#4).
 
 ## Recommendation
 

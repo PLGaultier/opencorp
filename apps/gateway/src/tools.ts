@@ -330,7 +330,19 @@ export const registry: Registry = {
       async handler(ctx) {
         const [c] = await ctx.sql<{ slug: string; subdomain: string }[]>`
           SELECT slug, subdomain FROM companies WHERE id = ${ctx.companyId}`;
-        return { live: true, url: `http://${c!.subdomain}` };
+        if (!c) return { error: "not_found" };
+        const url = `http://${c.subdomain}`;
+        // Ask deployd whether a site is actually published for this slug, instead
+        // of always claiming live (an agent that never deployed must not be told
+        // its site is up). /exists is 200 when SITES_DIR/{slug} exists, else 404.
+        try {
+          const res = await fetch(`${ctx.deploydUrl}/exists?domain=${encodeURIComponent(c.slug)}`, {
+            signal: AbortSignal.timeout(5000),
+          });
+          return { live: res.ok, url };
+        } catch {
+          return { live: false, url, error: "deploy_status_unavailable" };
+        }
       },
     },
     set_custom_domain: {
