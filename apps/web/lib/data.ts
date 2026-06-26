@@ -511,6 +511,83 @@ export async function getCampaigns(slug: string, cookie?: string): Promise<Campa
   }
 }
 
+// Insights dashboard (ticket #4). Mirrors the @opencorp/insights report shape
+// (web is a separate package, so the type is declared locally like the others).
+export interface InsightsReport {
+  company: { id: string; slug: string; name: string };
+  rangeDays: number;
+  generatedAt: string;
+  money: {
+    revenueGrossCents: number;
+    revenueNetCents: number;
+    salesCount: number;
+    creditBurnCents: number;
+    creditBalanceCents: number;
+    realBalanceCents: number;
+    runwayDays: number | null;
+  };
+  acquisition: {
+    spendCents: number;
+    impressions: number;
+    clicks: number;
+    attributedRevenueCents: number;
+    roas: number | null;
+    bestCampaign: { name: string; roas: number } | null;
+  };
+  funnel: { visitors: number | null; adClicks: number; sales: number; conversion: number | null };
+  ops: {
+    tasksDone: number;
+    tasksFailed: number;
+    topFailingTools: { server: string; tool: string; count: number }[];
+    rateLimitedCount: number;
+    pendingApprovals: { server: string; tool: string; count: number }[];
+  };
+  activity: { type: string; at: string; summary: string }[];
+}
+
+// Demo report so the dashboard stands alone in the Vercel preview.
+const demoInsights: Record<string, InsightsReport> = {
+  "sell-handmade-ceramic": {
+    company: { id: "demo", slug: "sell-handmade-ceramic", name: "Sell Handmade Ceramic" },
+    rangeDays: 7,
+    generatedAt: new Date().toISOString(),
+    money: {
+      revenueGrossCents: 22800, revenueNetCents: 22000, salesCount: 12,
+      creditBurnCents: 1100, creditBalanceCents: 54000, realBalanceCents: 22000, runwayDays: 34,
+    },
+    acquisition: {
+      spendCents: 4000, impressions: 5000, clicks: 88, attributedRevenueCents: 15200,
+      roas: 3.8, bestCampaign: { name: "summer-sale", roas: 3.8 },
+    },
+    funnel: { visitors: 61, adClicks: 88, sales: 12, conversion: 12 / 61 },
+    ops: {
+      tasksDone: 31, tasksFailed: 4,
+      topFailingTools: [{ server: "browser", tool: "submit_form", count: 3 }],
+      rateLimitedCount: 2,
+      pendingApprovals: [{ server: "ads", tool: "launch_campaign", count: 2 }],
+    },
+    activity: [
+      { type: "money_in", at: new Date().toISOString(), summary: "sale +19.00€" },
+      { type: "deploy", at: new Date().toISOString(), summary: "deployed site → http://sell-handmade-ceramic.localhost" },
+      { type: "product_created", at: new Date().toISOString(), summary: 'created product "Glazed Mug" @ 19.00€' },
+    ],
+  },
+};
+
+export async function getInsights(slug: string, rangeDays = 7, cookie?: string): Promise<InsightsReport | null> {
+  if (!API_URL) return demoInsights[slug] ?? null;
+  try {
+    const res = await fetch(`${API_URL}/api/companies/${slug}/insights?rangeDays=${rangeDays}`, {
+      cache: "no-store",
+      headers: cookie ? { cookie } : undefined,
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as InsightsReport;
+  } catch {
+    return null;
+  }
+}
+
 export async function getEmails(slug: string, direction?: "in" | "out", cookie?: string): Promise<Email[]> {
   if (!API_URL) {
     const all = demoEmails[slug] ?? [];

@@ -13,6 +13,7 @@
       "name": "@opencorp/api",
       "version": "0.1.0",
       "dependencies": {
+        "@opencorp/insights": "workspace:*",
         "@opencorp/ledgerd": "workspace:*",
         "@opencorp/llm": "workspace:*",
         "@opencorp/schema": "workspace:*",

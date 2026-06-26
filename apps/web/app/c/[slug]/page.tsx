@@ -73,9 +73,14 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
           <h1>
             {company.name} <span className={`dot ${company.status === "paused" ? "paused" : ""}`} style={{ display: "inline-block" }} />{" "}
             {owner && (
-              <Link href={`/c/${slug}/settings`} className="sub" style={{ fontSize: "0.85rem", textDecoration: "underline" }}>
-                settings
-              </Link>
+              <>
+                <Link href={`/c/${slug}/insights`} className="sub" style={{ fontSize: "0.85rem", textDecoration: "underline" }}>
+                  insights
+                </Link>{" "}
+                <Link href={`/c/${slug}/settings`} className="sub" style={{ fontSize: "0.85rem", textDecoration: "underline" }}>
+                  settings
+                </Link>
+              </>
             )}
           </h1>
           <p className="sub">{company.mission}</p>

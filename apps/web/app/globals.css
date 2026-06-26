@@ -411,6 +411,31 @@ a.task:hover { border-color: var(--accent); }
 /* Reusable section panel + header */
 .panel { border-top: 1px solid var(--border); padding-top: 1.25rem; }
 
+/* Insights dashboard (ticket #4) */
+.ins-head { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+.ins-range { margin-left: auto; display: flex; gap: 0.4rem; font-size: 0.8rem; }
+.ins-range a { color: var(--muted); padding: 0.15rem 0.55rem; border: 1px solid var(--border); border-radius: 6px; }
+.ins-range a.on { color: var(--text); border-color: var(--accent); }
+.ins-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-top: 1.25rem; }
+.ins-card { border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem; background: var(--panel); }
+.ins-card.wide { grid-column: 1 / -1; }
+.ins-card h2 { font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 0.85rem; }
+.ins-kpi { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+.ins-kpi small { display: block; font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
+.ins-funnel { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.ins-step { text-align: center; min-width: 64px; }
+.ins-step b { display: block; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.ins-step span { font-size: 0.72rem; color: var(--muted); }
+.ins-arrow { color: var(--muted); font-size: 1.1rem; }
+.ins-row { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.85rem; padding: 0.25rem 0; }
+.ins-row > span { color: var(--muted); }
+.ins-warn { color: var(--amber); }
+.ins-bad { color: var(--red); }
+.ins-good { color: var(--green); }
+.ins-feed { list-style: none; padding: 0; margin: 0; }
+.ins-feed li { font-size: 0.83rem; padding: 0.35rem 0; border-top: 1px solid var(--border); color: var(--muted); }
+.ins-feed li:first-child { border-top: 0; }
+
 /* Website preview — a framed, non-interactive shot of the live front page */
 .site-open { color: var(--accent); font-size: 0.85rem; }
 .site-open:hover { text-decoration: underline; }
