@@ -22,6 +22,36 @@ const MAX_FILE_READ = 256 * 1024;
 const DEFAULT_EXEC_TIMEOUT_MS = 120_000;
 const MAX_EXEC_TIMEOUT_MS = 300_000;
 
+/**
+ * §8 — `exec` runs agent-authored shell, so it must NOT inherit the worker's
+ * full process env: that env carries platform secrets (ANTHROPIC_API_KEY,
+ * DATABASE_URL, GATEWAY_SECRET, STALWART_MASTER_SECRET, Stripe keys…). A
+ * `printenv` would otherwise hand them to the agent. We default-deny: only a
+ * small set of harmless locale/path vars pass through, plus any the operator
+ * explicitly allowlists via SANDBOX_EXEC_ENV_ALLOW (comma-separated names). This
+ * holds across every isolation backend — in E2B the VM also has no platform
+ * secrets, here we enforce the same shape in-process/subprocess.
+ */
+const EXEC_ENV_ALLOW = new Set([
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE",
+  "LC_ALL", "LC_CTYPE", "TERM", "TZ", "TMPDIR", "PWD", "COLUMNS", "LINES",
+]);
+
+export function buildExecEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const extra = (env.SANDBOX_EXEC_ENV_ALLOW ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const allow = new Set([...EXEC_ENV_ALLOW, ...extra]);
+  const out: Record<string, string> = {};
+  for (const k of allow) {
+    const v = env[k];
+    if (v !== undefined) out[k] = v;
+  }
+  if (!out.PATH) out.PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+  return out;
+}
+
 export interface CodeRunnerOptions {
   /** Workspace root; created if absent. Defaults to a per-task temp dir. */
   workspace?: string;
@@ -78,7 +108,12 @@ export class CodeRunner {
 
   private async exec(command: string, timeoutMs?: number): Promise<Record<string, unknown>> {
     const timeout = Math.min(timeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS, MAX_EXEC_TIMEOUT_MS);
-    const r = await runProcess("bash", ["-lc", command], { cwd: this.root, timeoutMs: timeout });
+    // Scrubbed env (§8): agent shell never sees the worker's platform secrets.
+    const r = await runProcess("bash", ["-lc", command], {
+      cwd: this.root,
+      timeoutMs: timeout,
+      env: buildExecEnv(),
+    });
     return {
       ok: !r.timedOut && r.exitCode === 0,
       exitCode: r.timedOut ? null : r.exitCode,
@@ -164,10 +199,12 @@ function cap(s: string): string {
 function runProcess(
   cmd: string,
   args: string[],
-  opts: { cwd: string; timeoutMs?: number },
+  opts: { cwd: string; timeoutMs?: number; env?: Record<string, string> },
 ): Promise<{ exitCode: number | null; timedOut: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd });
+    // Pass env only when curated (exec); our own git invocations inherit the
+    // parent env so credential/SSH helpers keep working.
+    const child = spawn(cmd, args, opts.env ? { cwd: opts.cwd, env: opts.env } : { cwd: opts.cwd });
     // @types/bun's ChildProcess doesn't surface the EventEmitter methods; the
     // runtime object is a real EventEmitter, so reach them through that type.
     const events = child as unknown as EventEmitter;

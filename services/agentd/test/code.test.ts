@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CodeRunner } from "../src/code";
+import { CodeRunner, buildExecEnv } from "../src/code";
 
 /**
  * code-mcp executor (§7.1): runs in the worker's sandbox against its real
@@ -71,6 +71,23 @@ describe("CodeRunner exec", () => {
     expect(out.exitCode).not.toBe(0);
   });
 
+  test("does not leak the worker's platform secrets into the agent shell (§8)", async () => {
+    const { runner, ws } = freshRunner();
+    cleanups.push(ws);
+    process.env.OC_TEST_PLATFORM_SECRET = "sk-should-not-be-visible";
+    try {
+      const out = (await runner.run("exec", { command: "printenv OC_TEST_PLATFORM_SECRET || echo SCRUBBED" })) as {
+        stdout: string;
+      };
+      expect(out.stdout.trim()).toBe("SCRUBBED");
+      // PATH still passes through so real builds work.
+      const path = (await runner.run("exec", { command: "echo $PATH" })) as { stdout: string };
+      expect(path.stdout.trim().length).toBeGreaterThan(0);
+    } finally {
+      delete process.env.OC_TEST_PLATFORM_SECRET;
+    }
+  });
+
   test("kills a command that exceeds its timeout", async () => {
     const { runner, ws } = freshRunner();
     cleanups.push(ws);
@@ -79,6 +96,28 @@ describe("CodeRunner exec", () => {
     };
     expect(out.timedOut).toBe(true);
     expect(out.ok).toBe(false);
+  });
+});
+
+describe("buildExecEnv", () => {
+  test("default-denies unknown vars, keeps locale/path, honours the operator allowlist", () => {
+    const env = buildExecEnv({
+      PATH: "/usr/bin",
+      HOME: "/home/x",
+      ANTHROPIC_API_KEY: "sk-secret",
+      DATABASE_URL: "postgres://secret",
+      MY_BUILD_FLAG: "1",
+      SANDBOX_EXEC_ENV_ALLOW: "MY_BUILD_FLAG",
+    });
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/home/x");
+    expect(env.MY_BUILD_FLAG).toBe("1"); // explicitly allowlisted
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+  });
+
+  test("synthesises a sane PATH when the parent lacks one", () => {
+    expect(buildExecEnv({}).PATH).toContain("/usr/bin");
   });
 });
 
