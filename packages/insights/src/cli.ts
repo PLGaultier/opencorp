@@ -12,10 +12,13 @@ import { renderReport } from "./format";
 
 const url = process.env.DATABASE_URL ?? "postgres://opencorp:opencorp@localhost:5432/opencorp";
 const args = process.argv.slice(2);
-const slug = args.find((a) => !a.startsWith("--"));
 const json = args.includes("--json");
 const rangeIdx = args.indexOf("--range");
 const rangeDays = rangeIdx >= 0 && args[rangeIdx + 1] ? Math.max(1, Number(args[rangeIdx + 1])) : 7;
+// The slug is the first bare arg that isn't the value consumed by --range, so
+// `insights --range 30 acme` resolves to "acme" rather than "30".
+const rangeValueIdx = rangeIdx >= 0 ? rangeIdx + 1 : -1;
+const slug = args.find((a, i) => !a.startsWith("--") && i !== rangeValueIdx);
 
 if (!slug) {
   console.error("usage: insights <company-slug> [--range 7] [--json]");

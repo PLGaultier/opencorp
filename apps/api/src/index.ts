@@ -663,7 +663,7 @@ app.get("/api/companies/:slug/insights", requireAuth, requireCompanyAccessBySlug
   >`SELECT id, name, slug, conglomerate_id, real_balance_cents
     FROM companies WHERE slug = ${c.req.param("slug")}`;
   if (!co) return c.json({ error: "not_found" }, 404);
-  const rangeDays = Math.min(Math.max(Number(c.req.query("rangeDays") ?? 7), 1), 90);
+  const rangeDays = Math.min(Math.max(Number(c.req.query("rangeDays")) || 7, 1), 90);
   const report = await buildReport(sql, {
     company: {
       id: co.id,

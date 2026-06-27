@@ -575,7 +575,10 @@ const demoInsights: Record<string, InsightsReport> = {
 };
 
 export async function getInsights(slug: string, rangeDays = 7, cookie?: string): Promise<InsightsReport | null> {
-  if (!API_URL) return demoInsights[slug] ?? null;
+  if (!API_URL) {
+    const demo = demoInsights[slug];
+    return demo ? { ...demo, rangeDays } : null;
+  }
   try {
     const res = await fetch(`${API_URL}/api/companies/${slug}/insights?rangeDays=${rangeDays}`, {
       cache: "no-store",
