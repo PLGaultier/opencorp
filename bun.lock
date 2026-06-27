@@ -13,6 +13,7 @@
       "name": "@opencorp/api",
       "version": "0.1.0",
       "dependencies": {
+        "@opencorp/insights": "workspace:*",
         "@opencorp/ledgerd": "workspace:*",
         "@opencorp/llm": "workspace:*",
         "@opencorp/schema": "workspace:*",
@@ -29,6 +30,7 @@
       "name": "@opencorp/gateway",
       "version": "0.1.0",
       "dependencies": {
+        "@opencorp/insights": "workspace:*",
         "@opencorp/ledgerd": "workspace:*",
         "@opencorp/llm": "workspace:*",
         "@opencorp/mcp-client": "workspace:*",
@@ -61,6 +63,13 @@
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
         "typescript": "^5.7.0",
+      },
+    },
+    "packages/insights": {
+      "name": "@opencorp/insights",
+      "version": "0.1.0",
+      "dependencies": {
+        "postgres": "^3.4.5",
       },
     },
     "packages/llm": {
@@ -374,6 +383,8 @@
     "@opencorp/deployd": ["@opencorp/deployd@workspace:services/deployd"],
 
     "@opencorp/gateway": ["@opencorp/gateway@workspace:apps/gateway"],
+
+    "@opencorp/insights": ["@opencorp/insights@workspace:packages/insights"],
 
     "@opencorp/ledgerd": ["@opencorp/ledgerd@workspace:services/ledgerd"],
 

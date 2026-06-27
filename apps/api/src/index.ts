@@ -5,6 +5,7 @@ import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import postgres from "postgres";
 import { Ledger, PgStore } from "@opencorp/ledgerd";
+import { buildReport } from "@opencorp/insights";
 import { ceoChat, llmConfigFromEnv, publicTraceUrl, traceConfigFromEnv, tracerFromEnv } from "@opencorp/llm";
 import { syncInboxFromEnv } from "@opencorp/stalwart";
 import {
@@ -648,6 +649,32 @@ app.get("/api/companies/:slug/campaigns", requireAuth, requireCompanyAccessBySlu
       };
     }),
   });
+});
+
+// Insights dashboard (F7 / ticket #4) — one read-only roll-up (funnel, ROAS, ops
+// health, money, activity) from @opencorp/insights, the same builder the agent
+// `insights.get_report` tool and the CLI use. Owner-only like payments/campaigns
+// (it surfaces failing tools + pending approvals). Visitors stay null here (the
+// per-company analytics secret lives behind the gateway); the funnel starts at
+// ad clicks, same as the CLI.
+app.get("/api/companies/:slug/insights", requireAuth, requireCompanyAccessBySlug, async (c) => {
+  const [co] = await sql<
+    { id: string; name: string; slug: string; conglomerate_id: string; real_balance_cents: string }[]
+  >`SELECT id, name, slug, conglomerate_id, real_balance_cents
+    FROM companies WHERE slug = ${c.req.param("slug")}`;
+  if (!co) return c.json({ error: "not_found" }, 404);
+  const rangeDays = Math.min(Math.max(Number(c.req.query("rangeDays")) || 7, 1), 90);
+  const report = await buildReport(sql, {
+    company: {
+      id: co.id,
+      name: co.name,
+      slug: co.slug,
+      conglomerateId: co.conglomerate_id,
+      realBalanceCents: Number(co.real_balance_cents),
+    },
+    rangeDays,
+  });
+  return c.json(report);
 });
 
 // §1 feature 3 — the company's real email inbox (Stalwart JMAP). Public read

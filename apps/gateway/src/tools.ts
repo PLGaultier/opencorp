@@ -9,6 +9,7 @@ import { monthlyAdSpendCents } from "./ads";
 import { emailFor, isValidAddress, listUnsubscribeHeader, syncInbox } from "./providers/email";
 import { getAnalytics } from "./providers/analytics";
 import { webSearch } from "./providers/research";
+import { buildReport } from "@opencorp/insights";
 import { embedMaybe, toVectorLiteral } from "@opencorp/llm";
 import type { BrowserProvider } from "./providers/browser";
 
@@ -845,6 +846,41 @@ export const registry: Registry = {
           SELECT reason, COALESCE(SUM(delta),0) AS total, count(*) AS n
           FROM credit_entries WHERE company_id = ${ctx.companyId}
           GROUP BY reason`;
+      },
+    },
+  },
+
+  // ── insights-mcp (F7) ─────────────────────────────────────────────────────
+  // One read-only roll-up of the company's funnel, ROAS, ops health (where it's
+  // stuck), money and recent activity — joined from the control DB + ledger. The
+  // agent uses it to see what's working and self-correct; the same builder backs
+  // the operator CLI. Live visitors come from analytics here (the gateway holds
+  // the per-company secret); the CLI degrades to the DB-derived funnel.
+  insights: {
+    get_report: {
+      schema: z.object({ rangeDays: z.number().int().min(1).max(90).default(7) }),
+      write: false,
+      async handler(ctx, args: { rangeDays: number }) {
+        const [c] = await ctx.sql<
+          { id: string; name: string; slug: string; conglomerate_id: string; real_balance_cents: string; umami_site_id: string | null }[]
+        >`SELECT id, name, slug, conglomerate_id, real_balance_cents, umami_site_id
+          FROM companies WHERE id = ${ctx.companyId}`;
+        if (!c) return { error: "not_found" };
+        const analytics = await getAnalytics(ctx.companyId, ctx.secrets, {
+          siteId: c.umami_site_id ?? null,
+          rangeDays: args.rangeDays,
+        }).catch(() => null);
+        return buildReport(ctx.sql, {
+          company: {
+            id: c.id,
+            name: c.name,
+            slug: c.slug,
+            conglomerateId: c.conglomerate_id,
+            realBalanceCents: Number(c.real_balance_cents),
+          },
+          rangeDays: args.rangeDays,
+          visitors: analytics?.source === "umami" ? analytics.visitors : null,
+        });
       },
     },
   },

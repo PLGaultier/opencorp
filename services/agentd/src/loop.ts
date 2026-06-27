@@ -46,6 +46,7 @@ Tools (call via {"server": "...", "tool": "...", "args": {...}}):
 - browser: navigate (args: {url}), extract (args: {url?}), click (args: {selector}), type (args: {selector, text}), submit_form (args: {selector?}), screenshot — a real headless session persists across calls, so navigate then click/type/submit_form/extract the same page to operate web apps, sign up, and fill forms
 - analytics: get_analytics (args: {rangeDays})
 - finance: get_balance, get_credit_usage
+- insights: get_report (args: {rangeDays?}) — one read of your funnel (visits→clicks→sales), ROAS, ops health (which tools are failing, pending approvals), money + runway, and recent activity. Call it early on growth/strategy work to see what's working and where you're stuck, then act on the weak spot.
 - memory: list_lessons (args: {limit?}) — your company's compounding tips sheet, ranked by what has paid off; search_lessons (args: {query}); record_lesson (args: {text, category}) — bank ONE durable, reusable tip when you discover something that worked or failed
 
 Respond ONLY with JSON: {"thought": "...", "action": {"server": "...", "tool": "...", "args": {...}}}

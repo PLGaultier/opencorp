@@ -15,6 +15,7 @@
     "dev:api": "bun run --cwd apps/api dev",
     "test": "bun test",
     "ledger:verify": "bun run services/ledgerd/src/cli.ts verify",
+    "insights": "bun run packages/insights/src/cli.ts",
     "db:generate": "bun run --cwd packages/schema generate",
     "db:migrate": "bun run --cwd packages/schema migrate"
   },
