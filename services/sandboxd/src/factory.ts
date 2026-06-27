@@ -22,6 +22,22 @@ export interface CreateSandboxPoolOptions {
 export function createSandboxPool(opts: CreateSandboxPoolOptions = {}): SandboxPool {
   const kind = (opts.kind ?? process.env.SANDBOX_KIND ?? "local") as SandboxKind;
   const capacity = opts.capacity ?? Number(process.env.SANDBOX_CAPACITY ?? 64);
+
+  // §8 — `local`/`subprocess` run agent-authored code without VM isolation: a
+  // sandbox escape reaches the host's filesystem and private network. That's
+  // fine for a trusted dev laptop, but a prod deploy that forgets
+  // SANDBOX_KIND=e2b would silently run every company unsandboxed. Fail closed
+  // in production unless the operator explicitly accepts the risk.
+  const isolated = kind === "e2b";
+  if (!isolated && process.env.NODE_ENV === "production" && process.env.ALLOW_UNSAFE_SANDBOX !== "1") {
+    throw new Error(
+      `refusing SANDBOX_KIND=${kind} in production: agent code would run without VM isolation. ` +
+        `Set SANDBOX_KIND=e2b, or ALLOW_UNSAFE_SANDBOX=1 to override deliberately.`,
+    );
+  }
+  // Make the active isolation boundary visible at boot — no silent fail-open.
+  console.error(`[sandboxd] execution plane: SANDBOX_KIND=${kind}${isolated ? "" : " (no VM isolation)"}`);
+
   switch (kind) {
     case "local":
       return new LocalSandboxPool(capacity);

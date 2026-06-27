@@ -5,7 +5,7 @@ import { z } from "zod";
 import { Ledger, PgStore } from "@opencorp/ledgerd";
 import { verifyToken } from "@opencorp/mcp-client";
 import { registry, type ToolContext } from "./tools";
-import { MemoryRateLimiter } from "./ratelimit";
+import { PgRateLimiter } from "./ratelimit";
 import { secretStoreFromEnv, infisicalEnv, InfisicalClient, InfisicalAdmin } from "./secrets";
 import { makeBrowser } from "./providers/browser";
 import { recordPayment } from "./revenue";
@@ -37,7 +37,7 @@ export function createGateway(opts?: {
   const poolMax = opts?.poolMax ?? Number(process.env.GATEWAY_PG_POOL ?? 10);
   const sql = postgres(databaseUrl, { max: poolMax });
   const ledger = new Ledger(new PgStore(databaseUrl, poolMax));
-  const limiter = new MemoryRateLimiter();
+  const limiter = new PgRateLimiter(sql);
   const secrets = secretStoreFromEnv();
   const browser = makeBrowser();
   // The gateway serves the local checkout page itself (it owns the DB + ledger
@@ -88,7 +88,7 @@ export function createGateway(opts?: {
     const def = registry[server]?.[tool];
     if (!def) return c.json({ error: "unknown_tool", server, tool }, 404);
 
-    const limited = def.write ? limiter.check(scope.companyId, tool) : null;
+    const limited = def.write ? await limiter.check(scope.companyId, tool) : null;
     if (limited) {
       await ledger.append({
         companyId: scope.companyId,
@@ -257,13 +257,17 @@ export function createGateway(opts?: {
     // Carry the campaign tag through the POST so attribution survives the click.
     const campaign = campaignTag(c);
     const action = campaign ? `?c=${campaign}` : "";
+    // Per-page-load nonce: it rides in the form body so a double-submit / refresh
+    // re-POSTs the SAME nonce and dedups (idempotent providerRef), while a fresh
+    // page load mints a new nonce and is a genuinely new sale.
+    const nonce = randomUUID();
     return c.html(
       checkoutPage({
         title: "Checkout",
         company: p.company_name,
         body: `<h1>${p.name}</h1><p class="co">${p.company_name}</p>
           <p class="price">${price}</p>
-          <form method="post" action="${action}"><button type="submit">Pay ${price}</button></form>
+          <form method="post" action="${action}"><input type="hidden" name="nonce" value="${nonce}"><button type="submit">Pay ${price}</button></form>
           <p class="note">Local checkout — no real card is charged.</p>`,
       }),
     );
@@ -278,15 +282,18 @@ export function createGateway(opts?: {
     const campaignId = tag
       ? (await sql<{ id: string }[]>`SELECT id FROM ad_campaigns WHERE id = ${tag} AND company_id = ${p.company_id}`)[0]?.id ?? null
       : null;
+    // The form's per-page-load nonce makes the sale idempotent: a refresh / double
+    // submit re-POSTs the same nonce and recordPayment dedups on providerRef. A
+    // direct POST without one falls back to a fresh uuid (no dedup, as before).
+    const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+    const nonce = typeof body.nonce === "string" && /^[0-9a-f-]{36}$/i.test(body.nonce) ? body.nonce : randomUUID();
     const result = await recordPayment(sql, ledger, {
       companyId: p.company_id,
       productId,
       campaignId,
       amountCents: Number(p.price_cents),
       currency: p.currency,
-      // Each checkout submit is a distinct sale; uniqueness keeps it idempotent
-      // per click while still allowing the same product to sell repeatedly.
-      providerRef: `local:checkout:${randomUUID()}`,
+      providerRef: `local:checkout:${slug}:${productId}:${nonce}`,
       feeCents: 0,
     });
     const price = money(Number(p.price_cents), p.currency);

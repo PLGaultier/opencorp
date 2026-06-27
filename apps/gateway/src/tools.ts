@@ -58,6 +58,30 @@ export interface ToolDef {
 
 type Registry = Record<string, Record<string, ToolDef>>;
 
+/**
+ * §7.3 — `execute_sql` writes to the live company DB with no human in the loop.
+ * Routine DML/DDL is the point, but irreversible loss (DROP / TRUNCATE /
+ * ALTER…DROP) must not happen autonomously: there's no undo and no approval.
+ * Block those statement kinds; the agent is told to surface a migration to the
+ * owner instead. Comments are stripped first so they can't hide a DROP, and
+ * each `;`-separated statement is checked (multi-statement strings).
+ * Known limitation: a DROP buried inside a DO/function body isn't caught — an
+ * acceptable gap for now (logged as a follow-up), far narrower than today's hole.
+ */
+export function isDestructiveSql(sql: string): boolean {
+  const stripped = sql
+    .replace(/--[^\n]*/g, " ")
+    .replace(/\/\*[\s\S]*?\*\//g, " ");
+  return stripped.split(";").some((stmt) => {
+    const s = stmt.trim().toLowerCase();
+    if (!s) return false;
+    if (/^drop\b/.test(s)) return true;
+    if (/^truncate\b/.test(s)) return true;
+    if (/^alter\b[\s\S]*\bdrop\b/.test(s)) return true;
+    return false;
+  });
+}
+
 /** Resolve a company's conglomerate + connected Meta ad account (for ads-mcp). */
 async function adsContext(ctx: ToolContext): Promise<{ conglomerateId: string; metaAccount: string | null }> {
   const [c] = await ctx.sql<{ conglomerate_id: string; meta_ad_account_id: string | null }[]>`
@@ -236,6 +260,12 @@ export const registry: Registry = {
       schema: z.object({ sql: z.string().min(1).max(10_000) }),
       write: true,
       async handler(ctx, args: { sql: string }) {
+        if (isDestructiveSql(args.sql)) {
+          return {
+            error: "blocked_destructive_sql",
+            hint: "DROP / TRUNCATE / ALTER…DROP are irreversible and blocked on the live company DB. If you truly need a schema change, describe it for the owner to run.",
+          };
+        }
         const db = await ctx.companyDb(ctx.companyId);
         const rows = await db.unsafe(args.sql);
         return { rowCount: rows.length ?? 0 };
@@ -301,7 +331,19 @@ export const registry: Registry = {
       async handler(ctx) {
         const [c] = await ctx.sql<{ slug: string; subdomain: string }[]>`
           SELECT slug, subdomain FROM companies WHERE id = ${ctx.companyId}`;
-        return { live: true, url: `http://${c!.subdomain}` };
+        if (!c) return { error: "not_found" };
+        const url = `http://${c.subdomain}`;
+        // Ask deployd whether a site is actually published for this slug, instead
+        // of always claiming live (an agent that never deployed must not be told
+        // its site is up). /exists is 200 when SITES_DIR/{slug} exists, else 404.
+        try {
+          const res = await fetch(`${ctx.deploydUrl}/exists?domain=${encodeURIComponent(c.slug)}`, {
+            signal: AbortSignal.timeout(5000),
+          });
+          return { live: res.ok, url };
+        } catch {
+          return { live: false, url, error: "deploy_status_unavailable" };
+        }
       },
     },
     set_custom_domain: {
