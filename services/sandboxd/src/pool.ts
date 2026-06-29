@@ -103,6 +103,10 @@ class LocalSandbox implements Sandbox {
         company: spec.company,
         budgets: spec.budgets,
         traceId: spec.traceId,
+        // §10 brains-level tier shift + OPE-6 provider bundle — forward both so
+        // the in-process dev/test path matches subprocess/e2b (runtime.ts).
+        tierShift: spec.tierShift,
+        bundle: spec.bundle,
         onStep,
       }),
     );
