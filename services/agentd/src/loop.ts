@@ -98,11 +98,12 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
         system: SYSTEM,
         user: transcript.join("\n\n"),
         jsonOnly: true,
-        // Reasoning models (e.g. GLM-5.2 on the frontier tier) spend a chunk of
-        // the budget on hidden reasoning tokens before emitting the action JSON;
-        // 2048 can truncate mid-reasoning → empty completion. 4096 leaves room
-        // for both, and is harmless headroom for non-reasoning models. (OPE-6)
         maxTokens: 4096,
+        // GLM (z.ai) tiers are reasoning models; on this many-step loop the hidden
+        // reasoning eats the output budget → empty completion. The action JSON
+        // already carries a visible `thought`, so disable hidden reasoning for
+        // fast, reliable worker steps. No-op for Anthropic (dropped). (OPE-6)
+        disableThinking: true,
         trace:
           tracer && input.traceId
             ? { tracer, traceId: input.traceId, name: `step-${n}` }

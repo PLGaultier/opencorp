@@ -70,6 +70,9 @@ async function main() {
             'A curated guide to cool, under-the-radar spots in Paris — cafés, bars, shops and walks — that turns readers into paying members.',
             'active', 'supervised', 1, 'phd', 'glm', ${`${slug}@opencorp.app`}, ${`${slug}.localhost`})
     RETURNING id`;
+  // phd brains (tier shift +1): the worker runs on frontier=glm-5.2 too. Viable
+  // now that worker steps disable hidden "thinking" (loop.ts) — glm-5.2 then runs
+  // fast without burning the budget on reasoning, so it executes the real task.
   const companyId = co!.id;
   await sql`INSERT INTO agents (company_id, kind, name, role_prompt, model_tier)
             VALUES (${companyId}, 'ceo', 'CEO', 'prompts/ceo.md', 'frontier')`;
@@ -78,7 +81,7 @@ async function main() {
   // what keeps it to a single task, not the credit cap.
   await sql`INSERT INTO credit_entries (conglomerate_id, company_id, delta, reason)
             VALUES (${cg!.id}, ${companyId}, '5000', 'grant')`;
-  console.log(`Provisioned Cool Paris ${slug} (${companyId}) — bundle=glm, brains=phd, 5000 credits, 1 task/day\n`);
+  console.log(`Provisioned Cool Paris ${slug} (${companyId}) — bundle=glm, brains=phd (CEO+worker on glm-5.2), 5000 credits, 1 task/day\n`);
 
   // ── real services, pointed at the live model ──────────────────────────────
   const { app, ledger } = createGateway({ databaseUrl: DATABASE_URL });

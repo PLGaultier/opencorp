@@ -21,6 +21,15 @@ export interface ChatOptions {
   user: string;
   jsonOnly?: boolean;
   maxTokens?: number;
+  /**
+   * Disable provider-side "thinking"/reasoning for this call (OPE-6). GLM models
+   * (z.ai) are reasoning models: on a tight, many-step loop the hidden reasoning
+   * tokens eat the output budget and return empty content. The worker's ReAct
+   * step already emits a visible `thought`, so hidden reasoning is redundant
+   * there — disable it for fast, reliable steps. Sent as z.ai's
+   * `thinking:{type:disabled}`; harmlessly dropped for Anthropic (drop_params).
+   */
+  disableThinking?: boolean;
   /** When set, the generation is recorded on the Langfuse trace (§9.2). */
   trace?: { tracer: Tracer; traceId: string; name?: string };
 }
@@ -80,6 +89,7 @@ export async function chatRaw(cfg: LlmConfig, opts: ChatOptions): Promise<ChatRe
       model: requestModel,
       max_tokens: opts.maxTokens ?? 2048,
       ...(opts.jsonOnly ? { response_format: { type: "json_object" } } : {}),
+      ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
       messages: [
         ...(opts.system ? [{ role: "system", content: opts.system }] : []),
         { role: "user", content: opts.user },
