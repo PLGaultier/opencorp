@@ -49,6 +49,12 @@ model_list:
 
 litellm_settings:
   num_retries: 2
+  # z.ai/GLM rejects `response_format: json_object` (the Anthropic tiers accept
+  # it). drop_params makes LiteLLM strip only the params a given model doesn't
+  # support — per-model, so Claude keeps JSON mode and GLM falls back to the
+  # prompt's "return JSON only" instruction + the CEO schema-repair retry loop
+  # (packages/llm/ceo.ts) / the worker's tolerant JSON parse. (OPE-6)
+  drop_params: true
   # Degrade gracefully under load/outage: Opus → Sonnet → Haiku, and the
   # parallel GLM ladder: glm-5.2 → glm-4.7 → glm-4.5-air.
   fallbacks:

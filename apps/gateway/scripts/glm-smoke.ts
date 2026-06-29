@@ -33,7 +33,10 @@ async function complete(model: string, body: Record<string, unknown>) {
       "content-type": "application/json",
       ...(API_KEY ? { authorization: `Bearer ${API_KEY}` } : {}),
     },
-    body: JSON.stringify({ model, max_tokens: 256, ...body }),
+    // Headroom matters: glm-5.2 (frontier) is a reasoning model — a tiny budget
+    // is spent on reasoning_tokens before any content, yielding empty output.
+    // Production CEO calls use 2048; 1024 is plenty for this probe.
+    body: JSON.stringify({ model, max_tokens: 1024, ...body }),
   });
   if (!res.ok) throw new Error(`${model} -> ${res.status} ${await res.text()}`);
   return (await res.json()) as {
