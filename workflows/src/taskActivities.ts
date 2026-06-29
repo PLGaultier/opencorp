@@ -61,12 +61,13 @@ export interface TaskRow {
   slug: string;
   mission: string;
   model_level: string;
+  model_bundle: string;
 }
 
 async function taskRow(taskId: string): Promise<TaskRow> {
   const [t] = await sql<TaskRow[]>`
     SELECT t.id, t.company_id, c.conglomerate_id, t.title, t.description,
-           c.name, c.slug, c.mission, c.model_level
+           c.name, c.slug, c.mission, c.model_level, c.model_bundle
     FROM tasks t JOIN companies c ON c.id = t.company_id
     WHERE t.id = ${taskId}`;
   if (!t) throw new Error(`task not found: ${taskId}`);
@@ -234,6 +235,7 @@ export async function runWorker(
         budgets,
         traceId: taskId,
         tierShift: tierShiftForLevel(t.model_level),
+        bundle: t.model_bundle === "glm" ? "glm" : "anthropic",
       },
       // §5.3 "every step streamed": step events come back from the sandbox
       // (in-process, pipe, or vsock) and on this side become a Temporal
@@ -338,7 +340,9 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
     });
   }
 
-  const cfg = llmConfigFromEnv();
+  // OPE-6: the CEO/department/reward calls run on the company's provider bundle.
+  const baseCfg = llmConfigFromEnv();
+  const cfg = baseCfg ? { ...baseCfg, bundle: company.modelBundle } : null;
   const tracer = tracerFromEnv();
   const day = new Date().toISOString().slice(0, 10);
 

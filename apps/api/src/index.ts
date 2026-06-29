@@ -106,7 +106,7 @@ const requireCompanyAccessBySlug: typeof requireAuth = async (c, next) => {
 // balance. Public companies only (is_public, §4).
 const PNL_COLUMNS = sql`
   c.id, c.slug, c.name, c.mission, c.status, c.real_balance_cents,
-  c.daily_task_cap, c.autonomy_level, c.model_level, c.is_public, c.ad_monthly_budget_cap_cents,
+  c.daily_task_cap, c.autonomy_level, c.model_level, c.model_bundle, c.is_public, c.ad_monthly_budget_cap_cents,
   COALESCE((SELECT SUM(amount_cents) FROM payments p WHERE p.company_id = c.id), 0) AS revenue_cents,
   COALESCE((SELECT -SUM(delta) FROM credit_entries ce
             WHERE ce.company_id = c.id AND ce.reason IN ('task_charge','task_refund')), 0) AS spend_cents,
@@ -119,7 +119,7 @@ interface PnlRow {
   id: string; slug: string; name: string; mission: string; status: string;
   real_balance_cents: string; revenue_cents: string; spend_cents: string;
   money_out_cents: string; tasks_done: string; tasks_queued: string;
-  daily_task_cap: string; autonomy_level: string; model_level: string; is_public: boolean;
+  daily_task_cap: string; autonomy_level: string; model_level: string; model_bundle: string; is_public: boolean;
   ad_monthly_budget_cap_cents: string;
 }
 const toPnl = (r: PnlRow) => ({
@@ -133,6 +133,7 @@ const toPnl = (r: PnlRow) => ({
   dailyTaskCap: Number(r.daily_task_cap),
   autonomyLevel: r.autonomy_level,
   modelLevel: r.model_level,
+  modelBundle: r.model_bundle,
   isPublic: r.is_public,
   adMonthlyBudgetCapCents: Number(r.ad_monthly_budget_cap_cents),
 });
@@ -310,6 +311,8 @@ app.patch("/companies/:id", requireAuth, requireCompanyAccess, async (c) => {
       autonomyLevel: z.enum(["supervised", "bounded", "full"]).optional(),
       // §10 — the CEO "brains" level (which model bundle powers the agents).
       modelLevel: z.enum(["intern", "grad", "phd"]).optional(),
+      // OPE-6 — provider family for this company's agents.
+      modelBundle: z.enum(["anthropic", "glm"]).optional(),
       isPublic: z.boolean().optional(),
       // §14 — owner's monthly ad-spend ceiling (cents). 0 disables ads.
       adMonthlyBudgetCapCents: z.number().int().min(0).max(1_000_000_00).optional(),
@@ -320,7 +323,7 @@ app.patch("/companies/:id", requireAuth, requireCompanyAccess, async (c) => {
   const companyId = c.req.param("id");
   const p = body.data;
   const [row] = await sql<
-    { id: string; name: string; mission: string; daily_task_cap: number; autonomy_level: string; model_level: string; is_public: boolean; ad_monthly_budget_cap_cents: string }[]
+    { id: string; name: string; mission: string; daily_task_cap: number; autonomy_level: string; model_level: string; model_bundle: string; is_public: boolean; ad_monthly_budget_cap_cents: string }[]
   >`
     UPDATE companies SET
       name = COALESCE(${p.name ?? null}, name),
@@ -328,15 +331,16 @@ app.patch("/companies/:id", requireAuth, requireCompanyAccess, async (c) => {
       daily_task_cap = COALESCE(${p.dailyTaskCap ?? null}, daily_task_cap),
       autonomy_level = COALESCE(${p.autonomyLevel ?? null}, autonomy_level),
       model_level = COALESCE(${p.modelLevel ?? null}, model_level),
+      model_bundle = COALESCE(${p.modelBundle ?? null}, model_bundle),
       is_public = COALESCE(${p.isPublic ?? null}, is_public),
       ad_monthly_budget_cap_cents = COALESCE(${p.adMonthlyBudgetCapCents ?? null}, ad_monthly_budget_cap_cents)
     WHERE id = ${companyId}
-    RETURNING id, name, mission, daily_task_cap, autonomy_level, model_level, is_public, ad_monthly_budget_cap_cents`;
+    RETURNING id, name, mission, daily_task_cap, autonomy_level, model_level, model_bundle, is_public, ad_monthly_budget_cap_cents`;
   if (!row) return c.json({ error: "not_found" }, 404);
   await ledger.append({ companyId, actor: "user", eventType: "company_settings", payload: p });
   return c.json({
     id: row.id, name: row.name, mission: row.mission,
-    dailyTaskCap: row.daily_task_cap, autonomyLevel: row.autonomy_level, modelLevel: row.model_level, isPublic: row.is_public,
+    dailyTaskCap: row.daily_task_cap, autonomyLevel: row.autonomy_level, modelLevel: row.model_level, modelBundle: row.model_bundle, isPublic: row.is_public,
     adMonthlyBudgetCapCents: Number(row.ad_monthly_budget_cap_cents),
   });
 });
@@ -533,8 +537,11 @@ app.post("/companies/:id/chat", requireAuth, requireCompanyAccess, async (c) => 
 
   const tracer = tracerFromEnv();
   const traceId = `ceo-chat-${companyId}-${Date.now()}`;
+  // OPE-6: chat runs on the company's provider bundle (Claude vs GLM).
+  const chatBase = llmConfigFromEnv();
+  const chatCfg = chatBase ? { ...chatBase, bundle: company.modelBundle } : null;
   const reply = await ceoChat(
-    llmConfigFromEnv(),
+    chatCfg,
     system,
     ctx,
     history,

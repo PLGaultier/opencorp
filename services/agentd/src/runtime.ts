@@ -23,6 +23,7 @@ export async function runWorkerRuntime(
       budgets: spec.budgets,
       traceId: spec.traceId,
       tierShift: spec.tierShift,
+      bundle: spec.bundle,
       onStep: (step) => emit({ type: "step", ...step }),
     });
     emit({ type: "result", summary: result.summary, steps: result.steps });

@@ -8,6 +8,9 @@
 /** The CEO "brains" ladder (§10): cheaper → pricier model bundle. */
 export type ModelLevel = "intern" | "grad" | "phd";
 
+/** Provider family powering a company's agents (OPE-6). */
+export type ModelBundle = "anthropic" | "glm";
+
 export interface Company {
   id: string;
   slug: string;
@@ -16,6 +19,8 @@ export interface Company {
   status: "active" | "paused";
   /** The CEO "brains" level — which model bundle powers the agents (§10). */
   modelLevel: ModelLevel;
+  /** Provider family for the agents (OPE-6): Claude vs GLM. */
+  modelBundle: ModelBundle;
   /** Real money spent on operations (LLM/API cost), in cents — §10 pillar 1. */
   spendCents: number;
   revenueCents: number;
@@ -176,6 +181,7 @@ export const demoCompanies: Company[] = [
     mission: "Build and grow a business around: sell handmade ceramic mugs online to coffee lovers",
     status: "active",
     modelLevel: "grad",
+    modelBundle: "anthropic",
     spendCents: 240,
     revenueCents: 5800,
     moneyOutCents: 2900,
@@ -194,6 +200,7 @@ export const demoCompanies: Company[] = [
     mission: "Build and grow a business around: a newsletter about vintage synthesizers for collectors",
     status: "active",
     modelLevel: "intern",
+    modelBundle: "glm",
     spendCents: 110,
     revenueCents: 2900,
     moneyOutCents: 0,
@@ -335,7 +342,7 @@ interface ApiCompany {
   id: string; slug: string; name: string; mission: string; status: Company["status"];
   revenueCents: number; spendCents: number; moneyOutCents: number; balanceCents: number;
   tasksDone: number; tasksQueued: number;
-  dailyTaskCap: number; autonomyLevel: Company["autonomyLevel"]; modelLevel: ModelLevel; isPublic: boolean;
+  dailyTaskCap: number; autonomyLevel: Company["autonomyLevel"]; modelLevel: ModelLevel; modelBundle: ModelBundle; isPublic: boolean;
   adMonthlyBudgetCapCents: number; emailAddress?: string | null;
 }
 

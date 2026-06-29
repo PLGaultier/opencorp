@@ -18,6 +18,25 @@ model_list:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  # GLM bundle (OPE-6). Same three-tier ladder, z.ai models. A company on
+  # model_bundle='glm' requests `glm-{tier}` (the client prefixes the tier),
+  # so the bare anthropic tiers above stay the default. Keyed off ZAI_API_KEY
+  # — which must also be mapped into the litellm container's environment in the
+  # compose files, not just placed in .env. Prices in packages/llm/pricing.ts.
+  #   glm-mini → glm-4.5-air   glm-standard → glm-4.7   glm-frontier → glm-5.2
+  - model_name: glm-frontier
+    litellm_params:
+      model: zai/glm-5.2
+      api_key: os.environ/ZAI_API_KEY
+  - model_name: glm-standard
+    litellm_params:
+      model: zai/glm-4.7
+      api_key: os.environ/ZAI_API_KEY
+  - model_name: glm-mini
+    litellm_params:
+      model: zai/glm-4.5-air
+      api_key: os.environ/ZAI_API_KEY
+
   # Optional: semantic lesson recall (§lessons phase 2). Anthropic has no
   # embeddings API, so point this at a 1024-dim model (the lessons.embedding
   # column is vector(1024)) — e.g. Voyage's voyage-3. Leave it out and the
@@ -30,7 +49,10 @@ model_list:
 
 litellm_settings:
   num_retries: 2
-  # Degrade gracefully under load/outage: Opus → Sonnet → Haiku.
+  # Degrade gracefully under load/outage: Opus → Sonnet → Haiku, and the
+  # parallel GLM ladder: glm-5.2 → glm-4.7 → glm-4.5-air.
   fallbacks:
     - frontier: ["standard"]
     - standard: ["mini"]
+    - glm-frontier: ["glm-standard"]
+    - glm-standard: ["glm-mini"]
