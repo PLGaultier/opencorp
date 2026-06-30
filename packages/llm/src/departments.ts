@@ -8,7 +8,7 @@ import { routeTier, deriveDepartmentSignals, type RouteDecision } from "./router
 function routedTrace(
   trace: ChatOptions["trace"],
   route: RouteDecision,
-  signals: Record<string, unknown>,
+  signals: object,
 ): ChatOptions["trace"] {
   if (!trace) return undefined;
   return {
