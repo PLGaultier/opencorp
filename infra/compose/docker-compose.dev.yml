@@ -60,6 +60,7 @@ services:
       # bring your own key; any OpenAI-compatible provider works
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ZAI_API_KEY: ${ZAI_API_KEY:-}
     volumes:
       - ./litellm.config.yaml:/etc/litellm/config.yaml:ro
     ports: ["4000:4000"]

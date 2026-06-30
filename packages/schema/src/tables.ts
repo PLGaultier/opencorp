@@ -32,6 +32,11 @@ export const modelTier = pgEnum("model_tier", ["frontier", "standard", "mini"]);
 // playful ladder — intern (cheapest, Haiku-biased) → grad (default, Sonnet) →
 // phd (priciest, Opus-biased). Higher levels spend more per task.
 export const modelLevel = pgEnum("model_level", ["intern", "grad", "phd"]);
+// Which provider family powers this company's agents (OPE-6). The tier ladder
+// (mini/standard/frontier) is unchanged; the bundle decides what each tier
+// resolves to — `anthropic` → Claude (Haiku/Sonnet/Opus), `glm` → z.ai GLM.
+// GLM is cheaper, so this is a per-company P&L lever; default keeps Claude.
+export const modelBundle = pgEnum("model_bundle", ["anthropic", "glm"]);
 // Ad campaign lifecycle (§14). Created `paused` (no spend), `active` once
 // launched, `paused` again on owner pause or auto-pause at the budget cap.
 export const adCampaignStatus = pgEnum("ad_campaign_status", ["paused", "active", "archived"]);
@@ -175,6 +180,8 @@ export const companies = pgTable("companies", {
   autonomyLevel: autonomyLevel("autonomy_level").notNull().default("supervised"),
   // §10: the model bundle powering this company's agents (see modelLevel enum).
   modelLevel: modelLevel("model_level").notNull().default("grad"),
+  // OPE-6: provider family for this company's agents (anthropic | glm).
+  modelBundle: modelBundle("model_bundle").notNull().default("anthropic"),
   // Ads (§14): owner-set ceiling on ad spend per calendar month. 0 = ads off.
   // Under `bounded` autonomy the agent may launch/budget campaigns up to this
   // cap without approval; beyond it the action parks for the owner (§7.3).

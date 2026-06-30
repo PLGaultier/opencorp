@@ -23,6 +23,8 @@ export const WorkerSpecSchema = z.object({
    * models, positive runs pricier ones. 0 (default) keeps the requested tier.
    */
   tierShift: z.number().optional(),
+  /** Provider family for this company's agents (OPE-6): 'anthropic' (default) | 'glm'. */
+  bundle: z.enum(["anthropic", "glm"]).optional(),
   /** Curated env injected into the sandbox (LLM endpoint, etc.); secrets arrive via Infisical. */
   env: z.record(z.string()).optional(),
   /** code-mcp workspace root (§7.1); defaults to a per-task dir in the sandbox. */

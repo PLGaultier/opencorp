@@ -7,12 +7,29 @@ import { shiftTier } from "./levels";
 
 export type ModelTier = "frontier" | "standard" | "mini";
 
+/**
+ * Provider family powering a company's agents (OPE-6). The tier ladder is the
+ * same for both; the bundle decides what each tier resolves to in LiteLLM —
+ * `anthropic` keeps the bare tier names (Claude), `glm` requests `glm-{tier}`
+ * (z.ai). Defaults to anthropic everywhere a bundle isn't set.
+ */
+export type ModelBundle = "anthropic" | "glm";
+
 export interface ChatOptions {
   tier: ModelTier;
   system?: string;
   user: string;
   jsonOnly?: boolean;
   maxTokens?: number;
+  /**
+   * Disable provider-side "thinking"/reasoning for this call (OPE-6). GLM models
+   * (z.ai) are reasoning models: on a tight, many-step loop the hidden reasoning
+   * tokens eat the output budget and return empty content. The worker's ReAct
+   * step already emits a visible `thought`, so hidden reasoning is redundant
+   * there — disable it for fast, reliable steps. Sent as z.ai's
+   * `thinking:{type:disabled}`; harmlessly dropped for Anthropic (drop_params).
+   */
+  disableThinking?: boolean;
   /** When set, the generation is recorded on the Langfuse trace (§9.2). */
   trace?: { tracer: Tracer; traceId: string; name?: string };
 }
@@ -25,6 +42,20 @@ export interface LlmConfig {
    * Negative = cheaper models, positive = pricier; 0 keeps the requested tier.
    */
   tierShift?: number;
+  /**
+   * Per-company provider family (OPE-6). `glm` routes to the GLM model_list
+   * entries (`glm-{tier}`); `anthropic`/undefined keeps the bare Claude tiers.
+   */
+  bundle?: ModelBundle;
+}
+
+/**
+ * Map a resolved tier to the LiteLLM `model_name` for a bundle. The GLM entries
+ * are registered as `glm-frontier`/`glm-standard`/`glm-mini`
+ * (infra/compose/litellm.config.yaml); anthropic keeps the bare tier name.
+ */
+export function modelForBundle(tier: ModelTier, bundle: ModelBundle | undefined): string {
+  return bundle === "glm" ? `glm-${tier}` : tier;
 }
 
 export function llmConfigFromEnv(): LlmConfig | null {
@@ -44,8 +75,10 @@ export interface ChatResult {
  *  caller can meter real API cost. */
 export async function chatRaw(cfg: LlmConfig, opts: ChatOptions): Promise<ChatResult> {
   const startTime = new Date();
-  // The company's CEO-level shifts the requested tier up/down the ladder (§10).
+  // The company's CEO-level shifts the requested tier up/down the ladder (§10),
+  // then the bundle (OPE-6) picks the provider family for that tier.
   const tier = shiftTier(opts.tier, cfg.tierShift ?? 0);
+  const requestModel = modelForBundle(tier, cfg.bundle);
   const res = await fetch(`${cfg.baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -53,9 +86,10 @@ export async function chatRaw(cfg: LlmConfig, opts: ChatOptions): Promise<ChatRe
       ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}),
     },
     body: JSON.stringify({
-      model: tier,
+      model: requestModel,
       max_tokens: opts.maxTokens ?? 2048,
       ...(opts.jsonOnly ? { response_format: { type: "json_object" } } : {}),
+      ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
       messages: [
         ...(opts.system ? [{ role: "system", content: opts.system }] : []),
         { role: "user", content: opts.user },
@@ -63,7 +97,7 @@ export async function chatRaw(cfg: LlmConfig, opts: ChatOptions): Promise<ChatRe
     }),
   });
   if (!res.ok) {
-    throw new Error(`llm ${tier} failed: ${res.status} ${await res.text()}`);
+    throw new Error(`llm ${requestModel} failed: ${res.status} ${await res.text()}`);
   }
   const data = (await res.json()) as {
     choices: { message: { content: string } }[];
@@ -72,7 +106,7 @@ export async function chatRaw(cfg: LlmConfig, opts: ChatOptions): Promise<ChatRe
   };
   const content = data.choices[0]?.message?.content;
   if (!content) throw new Error("llm returned empty completion");
-  const model = data.model ?? tier;
+  const model = data.model ?? requestModel;
   const usage = { input: data.usage?.prompt_tokens ?? 0, output: data.usage?.completion_tokens ?? 0 };
   if (opts.trace) {
     opts.trace.tracer.generation({

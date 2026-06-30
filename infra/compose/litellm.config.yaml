@@ -18,6 +18,27 @@ model_list:
       model: anthropic/claude-haiku-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  # GLM bundle (OPE-6). Same three-tier ladder, z.ai models. A company on
+  # model_bundle='glm' requests `glm-{tier}` (the client prefixes the tier),
+  # so the bare anthropic tiers above stay the default. Keyed off ZAI_API_KEY
+  # — which must also be mapped into the litellm container's environment in the
+  # compose files, not just placed in .env. Prices in packages/llm/pricing.ts.
+  #   glm-mini → glm-4.5-air   glm-standard → glm-4.6   glm-frontier → glm-4.7
+  # (glm-5.2 is not yet available on z.ai/LiteLLM; glm-4.7 is the current flagship
+  # reasoning model, so frontier resolves to it and standard drops to glm-4.6.)
+  - model_name: glm-frontier
+    litellm_params:
+      model: zai/glm-4.7
+      api_key: os.environ/ZAI_API_KEY
+  - model_name: glm-standard
+    litellm_params:
+      model: zai/glm-4.6
+      api_key: os.environ/ZAI_API_KEY
+  - model_name: glm-mini
+    litellm_params:
+      model: zai/glm-4.5-air
+      api_key: os.environ/ZAI_API_KEY
+
   # Optional: semantic lesson recall (§lessons phase 2). Anthropic has no
   # embeddings API, so point this at a 1024-dim model (the lessons.embedding
   # column is vector(1024)) — e.g. Voyage's voyage-3. Leave it out and the
@@ -30,7 +51,16 @@ model_list:
 
 litellm_settings:
   num_retries: 2
-  # Degrade gracefully under load/outage: Opus → Sonnet → Haiku.
+  # z.ai/GLM rejects `response_format: json_object` (the Anthropic tiers accept
+  # it). drop_params makes LiteLLM strip only the params a given model doesn't
+  # support — per-model, so Claude keeps JSON mode and GLM falls back to the
+  # prompt's "return JSON only" instruction + the CEO schema-repair retry loop
+  # (packages/llm/ceo.ts) / the worker's tolerant JSON parse. (OPE-6)
+  drop_params: true
+  # Degrade gracefully under load/outage: Opus → Sonnet → Haiku, and the
+  # parallel GLM ladder: glm-4.7 → glm-4.6 → glm-4.5-air.
   fallbacks:
     - frontier: ["standard"]
     - standard: ["mini"]
+    - glm-frontier: ["glm-standard"]
+    - glm-standard: ["glm-mini"]

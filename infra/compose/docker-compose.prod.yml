@@ -47,6 +47,7 @@ services:
     command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ZAI_API_KEY: ${ZAI_API_KEY:-}
       LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-}
     volumes: ["./litellm.config.yaml:/etc/litellm/config.yaml:ro"]
     restart: unless-stopped

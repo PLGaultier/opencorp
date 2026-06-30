@@ -37,6 +37,9 @@ cp .env.prod.example .env.prod
 # Edit .env.prod: replace every example.com with your domain, set strong
 # POSTGRES_PASSWORD / GATEWAY_SECRET / LITELLM_API_KEY / BETTER_AUTH_SECRET
 # (openssl rand -hex 32 each), and paste ANTHROPIC_API_KEY + GitHub OAuth creds.
+# Optional: set ZAI_API_KEY to enable the GLM provider bundle (OPE-6) — companies
+# on model_bundle='glm' then run on cheaper z.ai models. It's already mapped into
+# the litellm container in docker-compose.prod.yml.
 # BETTER_AUTH_SECRET is REQUIRED — the api refuses to boot in production without it.
 ```
 

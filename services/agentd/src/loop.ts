@@ -78,7 +78,8 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
   const base = llmConfigFromEnv();
   if (!base) return scriptedPolicy(input); // deterministic offline mode (dev/tests)
   // §10: the company's CEO "brains" level shifts every model call up/down a tier.
-  const cfg = { ...base, tierShift: input.tierShift ?? 0 };
+  // OPE-6: the bundle picks the provider family (Claude vs GLM) for that tier.
+  const cfg = { ...base, tierShift: input.tierShift ?? 0, bundle: input.bundle };
 
   const maxSteps = input.budgets?.maxSteps ?? 80;
   const deadline = Date.now() + (input.budgets?.maxWallClockMs ?? 30 * 60_000);
@@ -97,6 +98,12 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
         system: SYSTEM,
         user: transcript.join("\n\n"),
         jsonOnly: true,
+        maxTokens: 4096,
+        // GLM (z.ai) tiers are reasoning models; on this many-step loop the hidden
+        // reasoning eats the output budget → empty completion. The action JSON
+        // already carries a visible `thought`, so disable hidden reasoning for
+        // fast, reliable worker steps. No-op for Anthropic (dropped). (OPE-6)
+        disableThinking: true,
         trace:
           tracer && input.traceId
             ? { tracer, traceId: input.traceId, name: `step-${n}` }

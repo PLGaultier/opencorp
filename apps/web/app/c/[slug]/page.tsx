@@ -280,6 +280,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
               <EnginePanel
                 companyId={cid}
                 initialLevel={company.modelLevel}
+                initialBundle={company.modelBundle}
                 balanceCents={company.balanceCents}
                 dailyTaskCap={company.dailyTaskCap}
                 paused={company.status === "paused"}

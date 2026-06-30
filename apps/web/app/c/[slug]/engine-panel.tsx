@@ -3,10 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { API_URL, type ModelLevel } from "@/lib/data";
+import { API_URL, type ModelBundle, type ModelLevel } from "@/lib/data";
 import { LEVELS, levelMeta } from "@/lib/levels";
 
 const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
+
+/** Provider bundles (OPE-6): Claude vs the cheaper z.ai GLM family. */
+const BUNDLES: { id: ModelBundle; name: string; tag: string }[] = [
+  { id: "anthropic", name: "Claude", tag: "Anthropic — Haiku · Sonnet · Opus" },
+  { id: "glm", name: "GLM", tag: "z.ai — cheaper, lifts margin" },
+];
 
 /**
  * The "Engine" widget (§10): runway + the playful CEO "brains" picker. Choosing
@@ -16,12 +22,14 @@ const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 export function EnginePanel({
   companyId,
   initialLevel,
+  initialBundle,
   balanceCents,
   dailyTaskCap,
   paused,
 }: {
   companyId: string;
   initialLevel: ModelLevel;
+  initialBundle: ModelBundle;
   balanceCents: number;
   dailyTaskCap: number;
   paused: boolean;
@@ -29,6 +37,8 @@ export function EnginePanel({
   const router = useRouter();
   const [level, setLevel] = useState<ModelLevel>(initialLevel);
   const [saving, setSaving] = useState<ModelLevel | null>(null);
+  const [bundle, setBundle] = useState<ModelBundle>(initialBundle);
+  const [savingBundle, setSavingBundle] = useState(false);
   const [needsAuth, setNeedsAuth] = useState(false);
 
   const meta = levelMeta(level);
@@ -65,6 +75,34 @@ export function EnginePanel({
     }
   };
 
+  const chooseBundle = async (next: ModelBundle) => {
+    if (next === bundle || savingBundle) return;
+    const prev = bundle;
+    setBundle(next); // optimistic
+    if (!API_URL) return; // demo: visual only
+    setSavingBundle(true);
+    try {
+      const res = await fetch(`${API_URL}/companies/${companyId}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ modelBundle: next }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        setNeedsAuth(true);
+        setBundle(prev);
+      } else if (!res.ok) {
+        setBundle(prev);
+      } else {
+        router.refresh();
+      }
+    } catch {
+      setBundle(prev);
+    } finally {
+      setSavingBundle(false);
+    }
+  };
+
   return (
     <div className="engine">
       <div className="engine-head">
@@ -97,6 +135,24 @@ export function EnginePanel({
         ))}
       </div>
       <p className="sub engine-tag">{meta.tagline}</p>
+
+      <div className="engine-label">Provider</div>
+      <div className="level-dial">
+        {BUNDLES.map((b) => (
+          <button
+            key={b.id}
+            className={`level-card ${bundle === b.id ? "on" : ""}`}
+            onClick={() => chooseBundle(b.id)}
+            disabled={savingBundle}
+            title={b.tag}
+          >
+            <span className="level-name">{b.name}</span>
+            <span className="level-mult">{b.id === "glm" ? "z.ai" : "Anthropic"}</span>
+          </button>
+        ))}
+      </div>
+      <p className="sub engine-tag">{BUNDLES.find((b) => b.id === bundle)?.tag}</p>
+
       {needsAuth && (
         <p className="sub">
           Tuning the engine is limited to members —{" "}

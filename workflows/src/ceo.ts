@@ -12,6 +12,7 @@ import {
   type CeoPlan,
   type DepartmentKey,
   type LlmConfig,
+  type ModelBundle,
 } from "@opencorp/llm";
 
 /**
@@ -28,6 +29,8 @@ export interface CeoCompany {
   dailyTaskCap: number;
   conglomerateId: string;
   ceoAgentId: string | null;
+  /** Provider family for this company's agents (OPE-6). */
+  modelBundle: ModelBundle;
 }
 
 const PROMPT_PATH = fileURLToPath(new URL("../../prompts/ceo.md", import.meta.url));
@@ -79,8 +82,8 @@ export async function ensureDepartmentAgents(sql: Sql, companyId: string): Promi
 
 export async function ceoCompany(sql: Sql, companyId: string): Promise<CeoCompany> {
   const [c] = await sql<
-    { id: string; name: string; slug: string; mission: string; daily_task_cap: number; conglomerate_id: string; ceo_agent_id: string | null }[]
-  >`SELECT c.id, c.name, c.slug, c.mission, c.daily_task_cap, c.conglomerate_id,
+    { id: string; name: string; slug: string; mission: string; daily_task_cap: number; conglomerate_id: string; ceo_agent_id: string | null; model_bundle: string }[]
+  >`SELECT c.id, c.name, c.slug, c.mission, c.daily_task_cap, c.conglomerate_id, c.model_bundle,
            (SELECT id FROM agents WHERE company_id = c.id AND kind = 'ceo' LIMIT 1) AS ceo_agent_id
     FROM companies c WHERE c.id = ${companyId}`;
   if (!c) throw new Error(`company not found: ${companyId}`);
@@ -92,6 +95,7 @@ export async function ceoCompany(sql: Sql, companyId: string): Promise<CeoCompan
     dailyTaskCap: c.daily_task_cap,
     conglomerateId: c.conglomerate_id,
     ceoAgentId: c.ceo_agent_id,
+    modelBundle: c.model_bundle === "glm" ? "glm" : "anthropic",
   };
 }
 

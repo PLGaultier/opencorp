@@ -18,6 +18,11 @@ export const MODEL_PRICES: Record<string, TokenPrice> = {
   "claude-sonnet-4-6": { inputPerMTokUsd: 3, outputPerMTokUsd: 15 },
   "claude-opus-4-8": { inputPerMTokUsd: 5, outputPerMTokUsd: 25 },
   "claude-fable-5": { inputPerMTokUsd: 10, outputPerMTokUsd: 50 },
+  // GLM bundle (OPE-6) — z.ai list prices. Keep in sync with z.ai pricing and
+  // the model_list in infra/compose/litellm.config.yaml.
+  "glm-4.5-air": { inputPerMTokUsd: 0.2, outputPerMTokUsd: 1.1 },
+  "glm-4.6": { inputPerMTokUsd: 0.6, outputPerMTokUsd: 2.2 },
+  "glm-4.7": { inputPerMTokUsd: 0.6, outputPerMTokUsd: 2.2 },
 };
 
 // Fallback when the resolved model id isn't in the table (unknown/offline model
@@ -33,6 +38,13 @@ const TIER_MODEL: Record<string, string> = {
   mini: "claude-haiku-4-5",
   standard: "claude-sonnet-4-6",
   frontier: "claude-opus-4-8",
+  // GLM bundle aliases (OPE-6): LiteLLM echoes the `glm-{tier}` model_name, so
+  // map each to its backing z.ai model id for pricing. A bare resolved id like
+  // `zai/glm-4.7` is also caught by the substring match below. (glm-5.2 isn't on
+  // z.ai/LiteLLM yet, so frontier resolves to the glm-4.7 flagship.)
+  "glm-mini": "glm-4.5-air",
+  "glm-standard": "glm-4.6",
+  "glm-frontier": "glm-4.7",
 };
 
 /**
