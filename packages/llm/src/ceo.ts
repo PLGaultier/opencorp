@@ -3,7 +3,8 @@ import { z } from "zod";
 import { chat, type LlmConfig, type ChatOptions } from "./client";
 import type { DepartmentReport } from "./departments";
 import { renderLessonsBlock, type LessonTip } from "./lessons";
-import { routeTier, deriveHeartbeatSignals, deriveChatSignals, type RouteDecision } from "./router";
+import { routeTier, deriveHeartbeatSignals, budgetFromContext, type RouteDecision } from "./router";
+import { classifyChatSignals } from "./classify";
 
 /**
  * Attach an OPE-7 routing decision to a generation's trace: the tier shows up in
@@ -13,7 +14,7 @@ import { routeTier, deriveHeartbeatSignals, deriveChatSignals, type RouteDecisio
 function routedTrace(
   trace: ChatOptions["trace"],
   route: RouteDecision,
-  signals: Record<string, unknown>,
+  signals: object,
 ): ChatOptions["trace"] {
   if (!trace) return undefined;
   return {
@@ -166,10 +167,11 @@ export async function ceoChat(
     `Owner says: ${message}`,
     `Respond ONLY with JSON: {"reply": string, "new_tasks": [{"title", "description", "priority"}]}.`,
   ].join("\n\n");
-  // OPE-7: routine status chat runs cheap; an explicit directive that queues work
-  // earns standard/frontier.
-  const signals = deriveChatSignals(message);
-  const route = routeTier(signals);
+  // OPE-7: routine status chat runs cheap; a directive that queues work earns
+  // standard/frontier. OPE-7b: classify intent with the mini model when enabled
+  // (else deterministic), and cap the routed tier by the wallet's runway.
+  const signals = await classifyChatSignals(cfg, message);
+  const route = routeTier({ ...signals, budget: budgetFromContext(ctx) });
   let raw = await chat(cfg, {
     tier: route.tier,
     system: systemPrompt,

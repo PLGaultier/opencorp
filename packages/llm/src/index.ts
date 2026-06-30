@@ -6,5 +6,6 @@ export * from "./trace";
 export * from "./ceo";
 export * from "./departments";
 export * from "./router";
+export * from "./classify";
 export * from "./lessons";
 export * from "./embed";

@@ -38,6 +38,17 @@ export type Complexity = "trivial" | "routine" | "hard";
 /** Whether the output spends money, changes the mission, or emails a customer. */
 export type Stakes = "low" | "high";
 
+/**
+ * Wallet state for the budget guardrail (OPE-7b). Routing must respect runway:
+ * a `frontier` call on a near-empty balance is reckless. Both fields are already
+ * in `CeoContext`, so the caller passes them with no extra work.
+ */
+export interface BudgetSignal {
+  balanceCents: number;
+  /** Revenue in the last 24h — earns headroom (a company making money can spend). */
+  revenueCents24h?: number;
+}
+
 export interface RouteInput {
   taskKind: TaskKind;
   /** Defaults to `routine` when the caller can't tell. */
@@ -49,7 +60,22 @@ export interface RouteInput {
    * routes below it — a cheaper model is less likely to fix the JSON.
    */
   baseTier?: ModelTier;
+  /**
+   * Optional budget guardrail (OPE-7b). When set, the routed tier is *capped* by
+   * runway so a single decision can't drain the wallet. Only ever lowers the
+   * tier, never raises it; not applied to `schema_repair_retry` (a sunk-cost
+   * completion that must keep its tier to stand a chance of fixing the JSON).
+   */
+  budget?: BudgetSignal;
 }
+
+/**
+ * Runway bands (cents) for the budget guardrail. Sized against the ~80¢ default
+ * per-task estimate (`TASK_COST_ESTIMATE_CENTS`): below ~2 tasks of runway we
+ * stop spending on frontier, below ~1 task we drop to the floor model. Tunable.
+ */
+export const FRONTIER_MIN_CENTS = 500;
+export const STANDARD_MIN_CENTS = 150;
 
 export interface RouteDecision {
   tier: ModelTier;
@@ -67,13 +93,43 @@ const BY_COMPLEXITY: Record<Complexity, ModelTier> = {
 const rank = (t: ModelTier): number => TIER_LADDER.indexOf(t);
 /** The pricier of two tiers (used to enforce a floor). */
 const maxTier = (a: ModelTier, b: ModelTier): ModelTier => (rank(a) >= rank(b) ? a : b);
+/** The cheaper of two tiers (used to enforce a budget cap). */
+const minTier = (a: ModelTier, b: ModelTier): ModelTier => (rank(a) <= rank(b) ? a : b);
 
 /**
- * The policy table (OPE-7). Pure: `(taskKind, complexity, stakes) → base tier`.
- * This is the single place tier literals are allowed to live; call sites must
- * route through it. Tune the cells here, with tests, rather than at call sites.
+ * Budget guardrail (OPE-7b): cap a routed tier by runway so one call can't drain
+ * the wallet. Critically low balance → floor model regardless of revenue; merely
+ * low balance → at most standard, unless the company is earning (revenue buys
+ * back the frontier headroom). Only ever lowers the tier.
+ */
+function applyBudgetCap(d: RouteDecision, budget: BudgetSignal): RouteDecision {
+  let cap: ModelTier = "frontier";
+  if (budget.balanceCents < STANDARD_MIN_CENTS) {
+    cap = "mini";
+  } else if (budget.balanceCents < FRONTIER_MIN_CENTS && (budget.revenueCents24h ?? 0) === 0) {
+    cap = "standard";
+  }
+  const tier = minTier(d.tier, cap);
+  if (tier === d.tier) return d;
+  return { tier, reason: `${d.reason}; budget cap → ${tier} (balance ${budget.balanceCents}¢)` };
+}
+
+/**
+ * The policy table (OPE-7) + budget guardrail (OPE-7b). Pure:
+ * `(taskKind, complexity, stakes [, budget]) → tier`. This is the single place
+ * tier literals are allowed to live; call sites must route through it. Tune the
+ * cells here, with tests, rather than at call sites.
  */
 export function routeTier(input: RouteInput): RouteDecision {
+  const base = baseRoute(input);
+  // The repair retry holds its tier (never downshift); everything else respects
+  // the wallet when a budget is supplied.
+  if (input.taskKind === "schema_repair_retry" || !input.budget) return base;
+  return applyBudgetCap(base, input.budget);
+}
+
+/** The pure policy table, before the budget guardrail. */
+function baseRoute(input: RouteInput): RouteDecision {
   const { taskKind } = input;
   const complexity = input.complexity ?? "routine";
   const stakes = input.stakes ?? "low";
@@ -156,18 +212,29 @@ export function deriveHeartbeatSignals(ctx: CeoContext): {
   taskKind: Extract<TaskKind, "heartbeat_plan" | "heartbeat_noop">;
   complexity: Complexity;
   stakes: Stakes;
+  budget: BudgetSignal;
 } {
   const quiet = ctx.queuedTasks === 0 && ctx.revenueCents24h === 0 && !hasMess(ctx);
   return {
     taskKind: quiet ? "heartbeat_noop" : "heartbeat_plan",
     complexity: contextComplexity(ctx),
     stakes: contextStakes(ctx),
+    budget: budgetFromContext(ctx),
   };
 }
 
 /** Department sub-planner signals (same context read, kind pinned to synthesis). */
-export function deriveDepartmentSignals(ctx: CeoContext): { complexity: Complexity; stakes: Stakes } {
-  return { complexity: contextComplexity(ctx), stakes: contextStakes(ctx) };
+export function deriveDepartmentSignals(ctx: CeoContext): {
+  complexity: Complexity;
+  stakes: Stakes;
+  budget: BudgetSignal;
+} {
+  return { complexity: contextComplexity(ctx), stakes: contextStakes(ctx), budget: budgetFromContext(ctx) };
+}
+
+/** The wallet slice of context the budget guardrail needs. */
+export function budgetFromContext(ctx: CeoContext): BudgetSignal {
+  return { balanceCents: ctx.creditBalance, revenueCents24h: ctx.revenueCents24h };
 }
 
 /**

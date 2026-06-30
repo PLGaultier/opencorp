@@ -90,6 +90,48 @@ describe("routeTier (OPE-7) — schema_repair_retry never downshifts", () => {
   });
 });
 
+describe("routeTier (OPE-7b) — budget guardrail", () => {
+  const hardHigh = { taskKind: "heartbeat_plan", complexity: "hard", stakes: "high" } as const;
+
+  test("critically low balance caps at mini, even for a hard/high plan", () => {
+    expect(routeTier({ ...hardHigh, budget: { balanceCents: 50 } }).tier).toBe("mini");
+  });
+
+  test("low balance (no revenue) caps at standard", () => {
+    expect(routeTier({ ...hardHigh, budget: { balanceCents: 300 } }).tier).toBe("standard");
+  });
+
+  test("revenue buys back the frontier headroom at a low (but not critical) balance", () => {
+    expect(routeTier({ ...hardHigh, budget: { balanceCents: 300, revenueCents24h: 1000 } }).tier).toBe("frontier");
+    // but revenue does NOT override the critical floor
+    expect(routeTier({ ...hardHigh, budget: { balanceCents: 50, revenueCents24h: 1000 } }).tier).toBe("mini");
+  });
+
+  test("healthy balance applies no cap", () => {
+    expect(routeTier({ ...hardHigh, budget: { balanceCents: 5000 } }).tier).toBe("frontier");
+  });
+
+  test("the cap only ever lowers, never raises", () => {
+    // a mini base with a huge balance stays mini
+    expect(routeTier({ taskKind: "heartbeat_noop", budget: { balanceCents: 100_000 } }).tier).toBe("mini");
+    for (const balanceCents of [0, 100, 300, 5000])
+      for (const c of COMPLEXITIES)
+        for (const s of STAKES) {
+          const base = routeTier({ taskKind: "heartbeat_plan", complexity: c, stakes: s }).tier;
+          const capped = routeTier({ taskKind: "heartbeat_plan", complexity: c, stakes: s, budget: { balanceCents } }).tier;
+          expect(rank[capped]).toBeLessThanOrEqual(rank[base]);
+        }
+  });
+
+  test("schema_repair_retry ignores the budget (holds the failed tier)", () => {
+    expect(routeTier({ taskKind: "schema_repair_retry", baseTier: "frontier", budget: { balanceCents: 0 } }).tier).toBe("frontier");
+  });
+
+  test("the cap records why in the reason", () => {
+    expect(routeTier({ ...hardHigh, budget: { balanceCents: 50 } }).reason).toContain("budget cap");
+  });
+});
+
 // ── signal derivation ──────────────────────────────────────────────────────
 function ctx(over: Partial<CeoContext> = {}): CeoContext {
   return {
@@ -130,6 +172,12 @@ describe("deriveHeartbeatSignals (OPE-7)", () => {
     const s = deriveHeartbeatSignals(ctx({ revenueCents24h: 500 }));
     expect(s.taskKind).toBe("heartbeat_plan");
     expect(s.stakes).toBe("high");
+  });
+
+  test("carries the wallet so the budget cap fires: a broke company can't run frontier", () => {
+    const broke = deriveHeartbeatSignals(ctx({ creditBalance: 40, recentReports: [{ title: "t", status: "failed", summary: null }] }));
+    expect(broke.budget.balanceCents).toBe(40);
+    expect(routeTier(broke).tier).toBe("mini"); // would be frontier (hard/high) without the cap
   });
 });
 
