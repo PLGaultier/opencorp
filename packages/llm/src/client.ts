@@ -31,7 +31,7 @@ export interface ChatOptions {
    */
   disableThinking?: boolean;
   /** When set, the generation is recorded on the Langfuse trace (§9.2). */
-  trace?: { tracer: Tracer; traceId: string; name?: string };
+  trace?: { tracer: Tracer; traceId: string; name?: string; metadata?: Record<string, unknown> };
 }
 
 export interface LlmConfig {
@@ -115,6 +115,7 @@ export async function chatRaw(cfg: LlmConfig, opts: ChatOptions): Promise<ChatRe
       model,
       input: { system: opts.system, user: opts.user },
       output: content,
+      ...(opts.trace.metadata ? { metadata: opts.trace.metadata } : {}),
       ...(data.usage ? { usage } : {}),
       startTime,
       endTime: new Date(),
