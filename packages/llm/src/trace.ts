@@ -37,6 +37,8 @@ export interface GenerationRecord {
   input: unknown;
   output: unknown;
   usage?: { input: number; output: number };
+  /** Arbitrary structured tags (e.g. OPE-7 routing decision) for auditing. */
+  metadata?: Record<string, unknown>;
   startTime: Date;
   endTime: Date;
 }
@@ -80,6 +82,7 @@ export class Tracer {
         model: rec.model,
         input: rec.input,
         output: rec.output,
+        ...(rec.metadata ? { metadata: rec.metadata } : {}),
         ...(rec.usage ? { usage: rec.usage } : {}),
         startTime: rec.startTime.toISOString(),
         endTime: ts,

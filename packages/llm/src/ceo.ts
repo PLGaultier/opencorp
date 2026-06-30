@@ -3,6 +3,25 @@ import { z } from "zod";
 import { chat, type LlmConfig, type ChatOptions } from "./client";
 import type { DepartmentReport } from "./departments";
 import { renderLessonsBlock, type LessonTip } from "./lessons";
+import { routeTier, deriveHeartbeatSignals, deriveChatSignals, type RouteDecision } from "./router";
+
+/**
+ * Attach an OPE-7 routing decision to a generation's trace: the tier shows up in
+ * the generation name and the full {taskKind, complexity, stakes, tier, reason}
+ * lands in metadata, so per-task routing is auditable and tunable from traces.
+ */
+function routedTrace(
+  trace: ChatOptions["trace"],
+  route: RouteDecision,
+  signals: Record<string, unknown>,
+): ChatOptions["trace"] {
+  if (!trace) return undefined;
+  return {
+    ...trace,
+    name: `${trace.name ?? "chat"} [${route.tier}]`,
+    metadata: { ...signals, tier: route.tier, reason: route.reason },
+  };
+}
 
 /**
  * CEO planning brain (§5.2 steps 1–3) and chat (§1 feature 2). Pure LLM I/O:
@@ -106,18 +125,28 @@ export async function planHeartbeat(
       ? `Department proposals (you decide what actually gets queued — adopt, merge, reprioritize, or drop them):\n\n${departmentsBlock(departmentReports)}\n\n`
       : "") +
     `Respond with the planning JSON only.`;
-  let raw = await chat(cfg, { tier: "frontier", system: systemPrompt, user, jsonOnly: true, trace });
+  // OPE-7: route the strategic call by how messy/valuable this heartbeat is.
+  const signals = deriveHeartbeatSignals(ctx);
+  const route = routeTier(signals);
+  let raw = await chat(cfg, {
+    tier: route.tier,
+    system: systemPrompt,
+    user,
+    jsonOnly: true,
+    trace: routedTrace(trace, route, signals),
+  });
   for (let attempt = 0; ; attempt++) {
     const parsed = CeoPlan.safeParse(tryJson(raw));
     if (parsed.success) return parsed.data;
     if (attempt >= 1) throw new Error(`ceo plan failed validation: ${parsed.error.message}`);
-    // schema-repair retry (§5.4)
+    // schema-repair retry (§5.4) — never below the tier that just failed (OPE-7).
+    const repair = routeTier({ taskKind: "schema_repair_retry", baseTier: route.tier });
     raw = await chat(cfg, {
-      tier: "frontier",
+      tier: repair.tier,
       system: systemPrompt,
       user: `${user}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
       jsonOnly: true,
-      trace,
+      trace: routedTrace(trace, repair, { taskKind: "schema_repair_retry" }),
     });
   }
 }
@@ -137,17 +166,29 @@ export async function ceoChat(
     `Owner says: ${message}`,
     `Respond ONLY with JSON: {"reply": string, "new_tasks": [{"title", "description", "priority"}]}.`,
   ].join("\n\n");
-  let raw = await chat(cfg, { tier: "frontier", system: systemPrompt, user, jsonOnly: true, trace });
+  // OPE-7: routine status chat runs cheap; an explicit directive that queues work
+  // earns standard/frontier.
+  const signals = deriveChatSignals(message);
+  const route = routeTier(signals);
+  let raw = await chat(cfg, {
+    tier: route.tier,
+    system: systemPrompt,
+    user,
+    jsonOnly: true,
+    trace: routedTrace(trace, route, signals),
+  });
   for (let attempt = 0; ; attempt++) {
     const parsed = CeoChatReply.safeParse(tryJson(raw));
     if (parsed.success) return parsed.data;
     if (attempt >= 1) throw new Error(`ceo chat failed validation: ${parsed.error.message}`);
+    // schema-repair retry — never below the tier that just failed (OPE-7).
+    const repair = routeTier({ taskKind: "schema_repair_retry", baseTier: route.tier });
     raw = await chat(cfg, {
-      tier: "frontier",
+      tier: repair.tier,
       system: systemPrompt,
       user: `${user}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
       jsonOnly: true,
-      trace,
+      trace: routedTrace(trace, repair, { taskKind: "schema_repair_retry" }),
     });
   }
 }

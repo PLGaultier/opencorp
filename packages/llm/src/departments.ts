@@ -2,6 +2,21 @@ import { z } from "zod";
 import { chat, type LlmConfig, type ChatOptions } from "./client";
 import { CeoTask, type CeoContext } from "./ceo";
 import { renderLessonsBlock, DEPARTMENT_CATEGORIES } from "./lessons";
+import { routeTier, deriveDepartmentSignals, type RouteDecision } from "./router";
+
+/** Attach the OPE-7 routing decision to a department generation's trace. */
+function routedTrace(
+  trace: ChatOptions["trace"],
+  route: RouteDecision,
+  signals: Record<string, unknown>,
+): ChatOptions["trace"] {
+  if (!trace) return undefined;
+  return {
+    ...trace,
+    name: `${trace.name ?? "chat"} [${route.tier}]`,
+    metadata: { ...signals, tier: route.tier, reason: route.reason },
+  };
+}
 
 /**
  * Multi-agent departments (§14 M5): CMO/CTO/CFO sub-planners that each review
@@ -70,18 +85,28 @@ export async function planDepartment(
 ): Promise<DepartmentReport> {
   if (!cfg) return fallbackDepartment(dept, ctx);
   const user = `Today's heartbeat context:\n\n${contextBlock(ctx, dept)}\n\nRespond with the ${DEPARTMENTS[dept].title} proposal JSON only.`;
-  let raw = await chat(cfg, { tier: "standard", system: systemPrompt, user, jsonOnly: true, trace });
+  // OPE-7: sub-planners run cheap (mini) unless the slice is hard/high-stakes.
+  const signals = { taskKind: "department_synthesis" as const, ...deriveDepartmentSignals(ctx) };
+  const route = routeTier(signals);
+  let raw = await chat(cfg, {
+    tier: route.tier,
+    system: systemPrompt,
+    user,
+    jsonOnly: true,
+    trace: routedTrace(trace, route, { ...signals, department: dept }),
+  });
   for (let attempt = 0; ; attempt++) {
     const parsed = DepartmentProposal.safeParse(tryJson(raw));
     if (parsed.success) return { department: dept, ...parsed.data };
     if (attempt >= 1) throw new Error(`${dept} proposal failed validation: ${parsed.error.message}`);
-    // schema-repair retry (§5.4)
+    // schema-repair retry (§5.4) — never below the tier that just failed (OPE-7).
+    const repair = routeTier({ taskKind: "schema_repair_retry", baseTier: route.tier });
     raw = await chat(cfg, {
-      tier: "standard",
+      tier: repair.tier,
       system: systemPrompt,
       user: `${user}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
       jsonOnly: true,
-      trace,
+      trace: routedTrace(trace, repair, { taskKind: "schema_repair_retry", department: dept }),
     });
   }
 }
