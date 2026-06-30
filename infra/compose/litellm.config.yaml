@@ -23,14 +23,16 @@ model_list:
   # so the bare anthropic tiers above stay the default. Keyed off ZAI_API_KEY
   # — which must also be mapped into the litellm container's environment in the
   # compose files, not just placed in .env. Prices in packages/llm/pricing.ts.
-  #   glm-mini → glm-4.5-air   glm-standard → glm-4.7   glm-frontier → glm-5.2
+  #   glm-mini → glm-4.5-air   glm-standard → glm-4.6   glm-frontier → glm-4.7
+  # (glm-5.2 is not yet available on z.ai/LiteLLM; glm-4.7 is the current flagship
+  # reasoning model, so frontier resolves to it and standard drops to glm-4.6.)
   - model_name: glm-frontier
     litellm_params:
-      model: zai/glm-5.2
+      model: zai/glm-4.7
       api_key: os.environ/ZAI_API_KEY
   - model_name: glm-standard
     litellm_params:
-      model: zai/glm-4.7
+      model: zai/glm-4.6
       api_key: os.environ/ZAI_API_KEY
   - model_name: glm-mini
     litellm_params:
@@ -56,7 +58,7 @@ litellm_settings:
   # (packages/llm/ceo.ts) / the worker's tolerant JSON parse. (OPE-6)
   drop_params: true
   # Degrade gracefully under load/outage: Opus → Sonnet → Haiku, and the
-  # parallel GLM ladder: glm-5.2 → glm-4.7 → glm-4.5-air.
+  # parallel GLM ladder: glm-4.7 → glm-4.6 → glm-4.5-air.
   fallbacks:
     - frontier: ["standard"]
     - standard: ["mini"]

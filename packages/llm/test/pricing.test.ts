@@ -4,16 +4,16 @@ import { modelForBundle } from "../src/client";
 
 describe("GLM bundle pricing (OPE-6)", () => {
   test("priceFor resolves the glm-{tier} alias LiteLLM echoes back", () => {
-    // glm-frontier → glm-5.2 ($1.4 / $4.4)
-    expect(priceFor("glm-frontier")).toEqual({ inputPerMTokUsd: 1.4, outputPerMTokUsd: 4.4 });
-    // glm-standard → glm-4.7 ($0.6 / $2.2)
+    // glm-frontier → glm-4.7 ($0.6 / $2.2)
+    expect(priceFor("glm-frontier")).toEqual({ inputPerMTokUsd: 0.6, outputPerMTokUsd: 2.2 });
+    // glm-standard → glm-4.6 ($0.6 / $2.2)
     expect(priceFor("glm-standard")).toEqual({ inputPerMTokUsd: 0.6, outputPerMTokUsd: 2.2 });
     // glm-mini → glm-4.5-air ($0.2 / $1.1)
     expect(priceFor("glm-mini")).toEqual({ inputPerMTokUsd: 0.2, outputPerMTokUsd: 1.1 });
   });
 
-  test("priceFor resolves a bare resolved id (e.g. zai/glm-5.2) via substring match", () => {
-    expect(priceFor("zai/glm-5.2")).toEqual({ inputPerMTokUsd: 1.4, outputPerMTokUsd: 4.4 });
+  test("priceFor resolves a bare resolved id (e.g. zai/glm-4.7) via substring match", () => {
+    expect(priceFor("zai/glm-4.7")).toEqual({ inputPerMTokUsd: 0.6, outputPerMTokUsd: 2.2 });
     expect(priceFor("glm-4.5-air")).toEqual({ inputPerMTokUsd: 0.2, outputPerMTokUsd: 1.1 });
   });
 

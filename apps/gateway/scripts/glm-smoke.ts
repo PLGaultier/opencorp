@@ -14,7 +14,7 @@
  *   - response_format: json_object yields parseable JSON (else CEO needs a repair path)
  *
  * Tier mapping (infra/compose/litellm.config.yaml): glm-mini -> zai/glm-4.5-air,
- * glm-standard -> zai/glm-4.7, glm-frontier -> zai/glm-5.2.
+ * glm-standard -> zai/glm-4.6, glm-frontier -> zai/glm-4.7.
  */
 const LITELLM_URL = process.env.LITELLM_URL ?? "http://localhost:4000";
 const API_KEY = process.env.LITELLM_API_KEY;
@@ -33,7 +33,7 @@ async function complete(model: string, body: Record<string, unknown>) {
       "content-type": "application/json",
       ...(API_KEY ? { authorization: `Bearer ${API_KEY}` } : {}),
     },
-    // Headroom matters: glm-5.2 (frontier) is a reasoning model — a tiny budget
+    // Headroom matters: glm-4.7 (frontier) is a reasoning model — a tiny budget
     // is spent on reasoning_tokens before any content, yielding empty output.
     // Production CEO calls use 2048; 1024 is plenty for this probe.
     body: JSON.stringify({ model, max_tokens: 1024, ...body }),

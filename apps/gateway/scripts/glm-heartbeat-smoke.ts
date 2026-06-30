@@ -1,8 +1,9 @@
 /**
  * GLM end-to-end heartbeat (OPE-6 verification). Provisions a real company
- * "Cool Paris" on model_bundle='glm' + model_level='phd', then runs the full
- * pipeline against live z.ai: department sub-planners (glm-4.7), CEO synthesis
- * (glm-5.2), one real worker task (glm-5.2 via the phd +1 shift), and CEO chat.
+ * "Cool Paris" on model_bundle='glm' + model_level='grad', then runs the full
+ * pipeline against live z.ai: department sub-planners + CEO synthesis on
+ * frontier=glm-4.7 (reasoning flagship), one real worker task on standard=glm-4.6,
+ * and CEO chat.
  *
  *   LITELLM_URL=http://localhost:4000 bun apps/gateway/scripts/glm-heartbeat-smoke.ts
  *
@@ -55,7 +56,7 @@ async function main() {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "glm-frontier", max_tokens: 64, messages: [{ role: "user", content: "ping" }] }),
   });
-  ok(probe.ok, `LiteLLM GLM routing works at ${LITELLM_URL} (glm-frontier → zai/glm-5.2)`);
+  ok(probe.ok, `LiteLLM GLM routing works at ${LITELLM_URL} (glm-frontier → zai/glm-4.7)`);
 
   // ── provision: cost-guarded "Cool Paris", GLM bundle, phd brains ───────────
   const slug = `coolparis-${Date.now().toString(36)}`;
@@ -68,11 +69,12 @@ async function main() {
        model_level, model_bundle, email_address, subdomain)
     VALUES (${cg!.id}, ${slug}, 'Cool Paris',
             'A curated guide to cool, under-the-radar spots in Paris — cafés, bars, shops and walks — that turns readers into paying members.',
-            'active', 'supervised', 1, 'phd', 'glm', ${`${slug}@opencorp.app`}, ${`${slug}.localhost`})
+            'active', 'supervised', 1, 'grad', 'glm', ${`${slug}@opencorp.app`}, ${`${slug}.localhost`})
     RETURNING id`;
-  // phd brains (tier shift +1): the worker runs on frontier=glm-5.2 too. Viable
-  // now that worker steps disable hidden "thinking" (loop.ts) — glm-5.2 then runs
-  // fast without burning the budget on reasoning, so it executes the real task.
+  // grad brains: CEO synthesis on frontier=glm-4.7 (reasoning flagship, one
+  // strategic call), worker loop on standard=glm-4.6 (thinking disabled → fast,
+  // reliable). The frontier reasoning model is the strategist; glm-4.6 honors the
+  // thinking-disable and runs the ReAct loop cleanly. (glm-5.2 isn't on z.ai yet.)
   const companyId = co!.id;
   await sql`INSERT INTO agents (company_id, kind, name, role_prompt, model_tier)
             VALUES (${companyId}, 'ceo', 'CEO', 'prompts/ceo.md', 'frontier')`;
@@ -81,7 +83,7 @@ async function main() {
   // what keeps it to a single task, not the credit cap.
   await sql`INSERT INTO credit_entries (conglomerate_id, company_id, delta, reason)
             VALUES (${cg!.id}, ${companyId}, '5000', 'grant')`;
-  console.log(`Provisioned Cool Paris ${slug} (${companyId}) — bundle=glm, brains=phd (CEO+worker on glm-5.2), 5000 credits, 1 task/day\n`);
+  console.log(`Provisioned Cool Paris ${slug} (${companyId}) — bundle=glm, brains=grad (CEO=glm-4.7, worker=glm-4.6), 5000 credits, 1 task/day\n`);
 
   // ── real services, pointed at the live model ──────────────────────────────
   const { app, ledger } = createGateway({ databaseUrl: DATABASE_URL });
@@ -131,7 +133,7 @@ async function main() {
   const [plan] = await sql<{ payload: { createdTasks: string[] } }[]>`
     SELECT payload FROM ledger_events
     WHERE company_id = ${companyId} AND event_type = 'ceo_plan' ORDER BY seq DESC LIMIT 1`;
-  ok(plan, "CEO synthesis produced a valid plan (schema-validated JSON from glm-5.2)");
+  ok(plan, "CEO synthesis produced a valid plan (schema-validated JSON from glm-4.7)");
   console.log(`  CEO created tasks: ${plan!.payload.createdTasks?.join(" · ") || "(none)"}`);
 
   const [brief] = await sql<{ payload: { brief: string } }[]>`
@@ -160,7 +162,7 @@ async function main() {
     WHERE company_id = ${companyId} AND reason IN ('task_charge','task_refund')`;
   console.log(`  Wallet debit for the task: ${Number(burn!.spent)} cents (metered at GLM rates)\n`);
 
-  // ── chat with the CEO (glm-5.2) ───────────────────────────────────────────
+  // ── chat with the CEO (glm-4.7) ───────────────────────────────────────────
   console.log('Chatting with the CEO: "What is the single best growth move for Cool Paris this week?"');
   const chat = (await (
     await fetch(`${api}/companies/${companyId}/chat`, {
