@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { API_URL, type ModelBundle, type ModelLevel } from "@/lib/data";
-import { LEVELS, levelMeta } from "@/lib/levels";
+import { LEVELS, levelMeta, modelLabel } from "@/lib/levels";
 
 const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 
@@ -127,10 +127,10 @@ export function EnginePanel({
             className={`level-card ${level === l.id ? "on" : ""}`}
             onClick={() => choose(l.id)}
             disabled={saving !== null}
-            title={`${l.model} · ≈${l.costMult}× cost`}
+            title={`${modelLabel(l, bundle)} · ≈${l.costMult}× cost`}
           >
             <span className="level-name">{l.name}</span>
-            <span className="level-mult">{l.model}</span>
+            <span className="level-mult">{modelLabel(l, bundle)}</span>
           </button>
         ))}
       </div>
