@@ -24,7 +24,11 @@ git fetch --quiet origin master
 git merge --ff-only origin/master
 
 echo "▶ 2/5  build app images"
-$COMPOSE build $APP_SERVICES
+# `migrate` MUST be rebuilt too: it bakes the migrations dir into its image, so a
+# stale migrate image silently skips new migrations (drizzle sees only the files
+# it was built with → "nothing to apply") while the freshly-built app code expects
+# the new columns. Build it alongside the app services before running it in 3/5.
+$COMPOSE build migrate $APP_SERVICES
 
 echo "▶ 3/5  apply DB migrations"
 $COMPOSE run --rm migrate
