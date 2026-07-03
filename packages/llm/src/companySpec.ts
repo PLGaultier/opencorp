@@ -42,7 +42,11 @@ export async function extractCompanySpec(
   prompt: string,
 ): Promise<CompanySpec> {
   if (!cfg) return fallbackSpec(prompt);
-  let raw = await chat(cfg, { tier: "mini", system: SYSTEM, user: prompt, jsonOnly: true });
+  // Founding spec extraction is a strict JSON task with a schema-repair retry —
+  // no benefit from provider-side reasoning, which on a GLM model just burns
+  // output budget on a hidden trace we discard. Disable it (harmlessly dropped
+  // for Anthropic via drop_params). OPE-6.
+  let raw = await chat(cfg, { tier: "mini", system: SYSTEM, user: prompt, jsonOnly: true, disableThinking: true });
   for (let attempt = 0; ; attempt++) {
     const parsed = CompanySpec.safeParse(tryJson(raw));
     if (parsed.success) return parsed.data;
@@ -53,6 +57,7 @@ export async function extractCompanySpec(
       system: SYSTEM,
       user: `${prompt}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
       jsonOnly: true,
+      disableThinking: true,
     });
   }
 }

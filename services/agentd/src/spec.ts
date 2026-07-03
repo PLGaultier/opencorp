@@ -12,7 +12,14 @@ export const WorkerSpecSchema = z.object({
   gatewayUrl: z.string(),
   token: z.string(),
   task: z.object({ id: z.string(), title: z.string(), description: z.string() }),
-  company: z.object({ name: z.string(), slug: z.string(), mission: z.string() }),
+  company: z.object({
+    name: z.string(),
+    slug: z.string(),
+    mission: z.string(),
+    /** Resolvable URL of the company's own published landing page (B1/B2), so the
+     *  worker edits its OWN site instead of searching the public web for it. */
+    siteUrl: z.string().optional(),
+  }),
   budgets: z
     .object({ maxSteps: z.number().optional(), maxWallClockMs: z.number().optional() })
     .optional(),

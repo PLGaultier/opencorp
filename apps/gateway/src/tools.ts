@@ -20,6 +20,20 @@ import type { BrowserProvider } from "./providers/browser";
  * handlers only do the work and may append domain-specific ledger events.
  */
 
+/**
+ * Resolvable URL of a company's own published site (B8) — mirrors deployd's rule
+ * (services/deployd/src/server.ts `siteUrl`): prod serves {slug}.{SITE_DOMAIN}
+ * behind Caddy; locally deployd serves it path-based at {deploydUrl}/sites/{slug}/.
+ * The stored `companies.subdomain` is the prod form and 404s in dev, so agents
+ * (deploy_site / get_deploy_status) must get the env-correct URL, not that.
+ */
+function companySiteUrl(slug: string, deploydUrl: string): string {
+  const domain = process.env.SITE_DOMAIN;
+  if (domain) return `https://${slug}.${domain}/`;
+  const base = (process.env.PUBLIC_SITE_URL ?? deploydUrl).replace(/\/$/, "");
+  return `${base}/sites/${slug}/`;
+}
+
 export interface ToolContext {
   sql: postgres.Sql; // control DB
   companyId: string;
@@ -315,7 +329,7 @@ export const registry: Registry = {
           body: JSON.stringify({ slug: c!.slug, files: args.files }),
         });
         if (!res.ok) throw new Error(`deploy failed: ${res.status} ${await res.text()}`);
-        const url = `http://${c!.slug}.${process.env.OPENCORP_DOMAIN ?? "localhost"}`;
+        const url = companySiteUrl(c!.slug, ctx.deploydUrl);
         await ctx.ledger.append({
           companyId: ctx.companyId,
           actor: `worker:${ctx.taskId}`,
@@ -329,10 +343,10 @@ export const registry: Registry = {
       schema: z.object({}),
       write: false,
       async handler(ctx) {
-        const [c] = await ctx.sql<{ slug: string; subdomain: string }[]>`
-          SELECT slug, subdomain FROM companies WHERE id = ${ctx.companyId}`;
+        const [c] = await ctx.sql<{ slug: string }[]>`
+          SELECT slug FROM companies WHERE id = ${ctx.companyId}`;
         if (!c) return { error: "not_found" };
-        const url = `http://${c.subdomain}`;
+        const url = companySiteUrl(c.slug, ctx.deploydUrl);
         // Ask deployd whether a site is actually published for this slug, instead
         // of always claiming live (an agent that never deployed must not be told
         // its site is up). /exists is 200 when SITES_DIR/{slug} exists, else 404.
@@ -343,6 +357,38 @@ export const registry: Registry = {
           return { live: res.ok, url };
         } catch {
           return { live: false, url, error: "deploy_status_unavailable" };
+        }
+      },
+    },
+    get_site: {
+      // B7 — read the company's OWN currently-published page so the worker can
+      // sharpen an existing site instead of blindly redeploying. It fetches from
+      // deployd server-to-server (not the browser), so it works in dev where the
+      // site lives on localhost — which the browser tool's SSRF guard blocks.
+      schema: z.object({
+        path: z
+          .string()
+          .max(200)
+          .regex(/^[a-zA-Z0-9._/-]*$/, "relative path only")
+          .default("index.html"),
+      }),
+      write: false,
+      async handler(ctx, args: { path: string }) {
+        const [c] = await ctx.sql<{ slug: string }[]>`
+          SELECT slug FROM companies WHERE id = ${ctx.companyId}`;
+        if (!c) return { error: "not_found" };
+        const rel = (args.path || "index.html").replace(/^\/+/, "");
+        try {
+          const res = await fetch(`${ctx.deploydUrl}/sites/${c.slug}/${rel}`, {
+            signal: AbortSignal.timeout(5000),
+          });
+          if (!res.ok) {
+            return { found: false, path: rel, error: res.status === 404 ? "not_deployed" : `status_${res.status}` };
+          }
+          const content = (await res.text()).slice(0, 200_000);
+          return { found: true, path: rel, content };
+        } catch {
+          return { found: false, path: rel, error: "site_unavailable" };
         }
       },
     },
