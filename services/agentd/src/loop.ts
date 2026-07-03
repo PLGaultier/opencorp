@@ -39,7 +39,7 @@ Tools (call via {"server": "...", "tool": "...", "args": {...}}):
 - org: get_company_info, read_mission, list_tasks, create_task
 - docs: create_document, update_document, list_documents, read_document, search_documents
 - db: get_schema, run_sql, execute_sql
-- web: search (args: {query, maxResults?}) — live web search; returns {title, url} hits + a short summary. Use it to find leads, companies, prices, or current facts, then browser.navigate/extract the promising URLs. deploy_site (args: {files: {"index.html": "..."}}), get_deploy_status
+- web: search (args: {query, maxResults?}) — live web search; returns {title, url} hits + a short summary. Use it to find leads, companies, prices, or current facts, then browser.navigate/extract the promising URLs. get_site (args: {path?}) — read YOUR OWN currently-published page (defaults to index.html); use this to see the current landing page before editing it. deploy_site (args: {files: {"index.html": "..."}}), get_deploy_status
 - code: exec (args: {command}), write_file (args: {path, content}), read_file (args: {path}), list_files (args: {dir?}), git_commit_push (args: {message}) — runs in your own Linux sandbox workspace; build and run real software here
 - payments: create_product (args: {name, priceCents, currency}), get_payment_link (args: {productId}), list_products, get_revenue
 - email: send_email (args: {to:[...], subject, body}), reply_email, list_emails, read_email
@@ -86,9 +86,19 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
   const tracer = input.traceId ? tracerFromEnv() : null;
   const code = codeRunnerFor(input);
   let costMicro = 0; // real metered API cost accrued across LLM calls (§10 pillar 1)
+  // B1/B2: tell the worker where its OWN site already lives and how to change it,
+  // so it doesn't web.search for its landing page and wander onto unrelated sites.
+  const site = input.company.siteUrl
+    ? `\nYour company's website is ALREADY published and live at ${input.company.siteUrl} — this is YOUR site, do not search the public web for it. To change it: call web.get_site to read the current HTML, edit it, then web.deploy_site the full updated HTML to republish.`
+    : "";
   const transcript: string[] = [
-    `Task: ${input.task.title}\n${input.task.description}\nCompany: ${input.company.name} — mission: ${input.company.mission}\nBudget: ${maxSteps} tool calls maximum. Ship the core deliverable before you run out.`,
+    `Task: ${input.task.title}\n${input.task.description}\nCompany: ${input.company.name} — mission: ${input.company.mission}${site}\nBudget: ${maxSteps} tool calls maximum. Ship the core deliverable before you run out.`,
   ];
+
+  // B4 — loop guard: GLM (esp. the cheaper tiers) can repeat the same failing
+  // call instead of adapting. Track recent tool signatures so we can nudge once
+  // and then hard-stop if the worker is spinning on an identical call.
+  const recentSigs: string[] = [];
 
   try {
     for (let n = 1; n <= maxSteps; n++) {
@@ -120,6 +130,19 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
         input.onStep?.({ n, thought });
         return { summary: action.final, steps: n, costMicroCents: costMicro };
       }
+      // B4 — detect spinning on an identical call and stop before it burns the
+      // whole budget (one nudge at the 2nd repeat, hard-stop at the 3rd).
+      const sig = `${action.server}.${action.tool}:${JSON.stringify(action.args)}`;
+      recentSigs.push(sig);
+      if (recentSigs.length > 6) recentSigs.shift();
+      const repeats = recentSigs.filter((s) => s === sig).length;
+      if (repeats >= 3) {
+        return {
+          summary: `Stopped: repeated ${action.server}.${action.tool} with identical args ${repeats}× without progress (step ${n}).`,
+          steps: n,
+          costMicroCents: costMicro,
+        };
+      }
       input.onStep?.({ n, thought, tool: `${action.server}.${action.tool}` });
       const result = await dispatchTool(input, code, action.server, action.tool, action.args);
       // §10 — a server-side-metered tool (e.g. web.search) returns its own usage;
@@ -129,9 +152,21 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
         if (m) costMicro += costMicroCents(m.model, m.usage);
         delete (result as { _meter?: unknown })._meter;
       }
+      // B3 — the gateway returns should_stop when the company has been paused mid
+      // run; end cleanly instead of retrying (halts the worker within one step).
+      if (result && typeof result === "object" && (result as { should_stop?: boolean }).should_stop) {
+        const msg = (result as { message?: string }).message ?? "company paused";
+        input.onStep?.({ n, thought: `Stopping: ${msg}` });
+        return { summary: `Stopped: ${msg}`, steps: n, costMicroCents: costMicro };
+      }
       transcript.push(
         `Step ${n}: called ${action.server}.${action.tool}\nResult: ${JSON.stringify(result).slice(0, 4000)}`,
       );
+      if (repeats === 2) {
+        transcript.push(
+          `You have now called ${action.server}.${action.tool} with the same arguments twice without progress. Do NOT call it again — change approach or finish (action.final) with what you have.`,
+        );
+      }
     }
     throw new Error("step_budget_exceeded");
   } finally {

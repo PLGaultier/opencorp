@@ -40,6 +40,23 @@ const GATEWAY_SECRET = process.env.GATEWAY_SECRET ?? "dev-gateway-secret";
 // Dashboard origin, so owner-facing briefs can deep-link to /credits (top-up).
 // Mirrors the API's WEB_ORIGIN default.
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
+const DEPLOYD_URL = process.env.DEPLOYD_URL ?? "http://localhost:3002";
+
+/**
+ * Resolvable URL of a company's own published site — mirrors deployd's rule
+ * (services/deployd/src/server.ts `siteUrl`): prod serves {slug}.{SITE_DOMAIN}
+ * behind Caddy; locally there's no wildcard DNS, so deployd serves it path-based
+ * at {DEPLOYD_URL}/sites/{slug}/. NB the stored `companies.subdomain` is the prod
+ * form and 404s in dev, so we derive the env-correct URL here instead (B2). This
+ * is injected into the worker so it edits its OWN landing page rather than
+ * hunting the public web for it (B1).
+ */
+function companySiteUrl(slug: string): string {
+  const domain = process.env.SITE_DOMAIN;
+  if (domain) return `https://${slug}.${domain}/`;
+  const base = (process.env.PUBLIC_SITE_URL ?? DEPLOYD_URL).replace(/\/$/, "");
+  return `${base}/sites/${slug}/`;
+}
 
 const sql = postgres(DATABASE_URL, { max: 5 });
 const ledger = new Ledger(new PgStore(DATABASE_URL));
@@ -231,7 +248,7 @@ export async function runWorker(
         gatewayUrl: GATEWAY_URL,
         token,
         task: { id: t.id, title: t.title, description: t.description },
-        company: { name: t.name, slug: t.slug, mission: t.mission },
+        company: { name: t.name, slug: t.slug, mission: t.mission, siteUrl: companySiteUrl(t.slug) },
         budgets,
         traceId: taskId,
         tierShift: tierShiftForLevel(t.model_level),

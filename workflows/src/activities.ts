@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
-import { extractCompanySpec, launchPlaybook, llmConfigFromEnv, type CompanySpec } from "@opencorp/llm";
+import { defaultBundleFromEnv, extractCompanySpec, launchPlaybook, llmConfigFromEnv, type CompanySpec } from "@opencorp/llm";
 import { Ledger, PgStore, type LedgerEventInput } from "@opencorp/ledgerd";
 import { StalwartAdmin, deriveMailboxPassword, stalwartEnv } from "@opencorp/stalwart";
 import { InfisicalAdmin, InfisicalClient, infisicalEnv } from "@opencorp/secrets";
@@ -39,10 +39,14 @@ export async function upsertCompany(input: {
   spec: CompanySpec;
 }): Promise<{ companyId: string }> {
   const { spec } = input;
+  // New companies inherit the platform default provider family (OPE-6). On a
+  // GLM-only deployment (OPENCORP_DEFAULT_BUNDLE=glm) this makes the company's
+  // heartbeat + task runs use GLM too, matching the founding spec-extraction call.
+  const bundle = defaultBundleFromEnv();
   const [row] = await sql<{ id: string }[]>`
-    INSERT INTO companies (conglomerate_id, slug, name, mission, subdomain, email_address, db_name)
+    INSERT INTO companies (conglomerate_id, slug, name, mission, subdomain, email_address, db_name, model_bundle)
     VALUES (${input.conglomerateId}, ${spec.slug}, ${spec.name}, ${spec.mission},
-            ${`${spec.slug}.${DOMAIN}`}, ${`${spec.slug}@${MAIL_DOMAIN}`}, ${`corp_${spec.slug.replaceAll("-", "_")}`})
+            ${`${spec.slug}.${DOMAIN}`}, ${`${spec.slug}@${MAIL_DOMAIN}`}, ${`corp_${spec.slug.replaceAll("-", "_")}`}, ${bundle})
     ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
     RETURNING id`;
   const companyId = row!.id;

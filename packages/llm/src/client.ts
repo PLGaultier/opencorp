@@ -26,8 +26,13 @@ export interface ChatOptions {
    * (z.ai) are reasoning models: on a tight, many-step loop the hidden reasoning
    * tokens eat the output budget and return empty content. The worker's ReAct
    * step already emits a visible `thought`, so hidden reasoning is redundant
-   * there — disable it for fast, reliable steps. Sent as z.ai's
-   * `thinking:{type:disabled}`; harmlessly dropped for Anthropic (drop_params).
+   * there — disable it for fast, reliable steps.
+   *
+   * Only forwarded for the GLM bundle. z.ai honors `thinking:{type:disabled}`,
+   * but only when passed verbatim via LiteLLM's `extra_body` passthrough — a
+   * top-level `thinking` is stripped by `drop_params` before it reaches z.ai,
+   * and `allowed_openai_params` makes the z.ai SDK throw. Anthropic tiers have
+   * extended thinking off by default, so the flag is a no-op there.
    */
   disableThinking?: boolean;
   /** When set, the generation is recorded on the Langfuse trace (§9.2). */
@@ -58,10 +63,21 @@ export function modelForBundle(tier: ModelTier, bundle: ModelBundle | undefined)
   return bundle === "glm" ? `glm-${tier}` : tier;
 }
 
+/**
+ * Platform default provider family (OPE-6). Used by bundle-less callers — the
+ * founding `extractSpec` call in CreateCompany, which runs before any company
+ * row exists — and to seed a new company's `model_bundle`. Lets a deployment
+ * with no Anthropic credits bootstrap and run entirely on GLM by setting
+ * `OPENCORP_DEFAULT_BUNDLE=glm`. Defaults to `anthropic` (bare Claude tiers).
+ */
+export function defaultBundleFromEnv(): ModelBundle {
+  return process.env.OPENCORP_DEFAULT_BUNDLE === "glm" ? "glm" : "anthropic";
+}
+
 export function llmConfigFromEnv(): LlmConfig | null {
   const baseUrl = process.env.LITELLM_URL;
   if (!baseUrl) return null;
-  return { baseUrl, apiKey: process.env.LITELLM_API_KEY };
+  return { baseUrl, apiKey: process.env.LITELLM_API_KEY, bundle: defaultBundleFromEnv() };
 }
 
 export interface ChatResult {
@@ -89,7 +105,11 @@ export async function chatRaw(cfg: LlmConfig, opts: ChatOptions): Promise<ChatRe
       model: requestModel,
       max_tokens: opts.maxTokens ?? 2048,
       ...(opts.jsonOnly ? { response_format: { type: "json_object" } } : {}),
-      ...(opts.disableThinking ? { thinking: { type: "disabled" } } : {}),
+      // Forward z.ai's reasoning switch through LiteLLM's extra_body passthrough
+      // (top-level `thinking` is dropped by drop_params). GLM-only — see ChatOptions.
+      ...(opts.disableThinking && cfg.bundle === "glm"
+        ? { extra_body: { thinking: { type: "disabled" } } }
+        : {}),
       messages: [
         ...(opts.system ? [{ role: "system", content: opts.system }] : []),
         { role: "user", content: opts.user },

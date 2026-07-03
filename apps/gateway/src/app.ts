@@ -104,6 +104,25 @@ export function createGateway(opts?: {
       return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
     }
 
+    // B3 — a paused company must not keep acting. Enforce it at the tool choke
+    // point (not just at dispatch): pausing then halts an in-flight worker within
+    // one step, with no external side effects, regardless of sandbox transport.
+    // `should_stop` tells the worker loop to end cleanly instead of retrying.
+    {
+      const [comp] = await sql<{ status: string }[]>`
+        SELECT status FROM companies WHERE id = ${scope.companyId}`;
+      if (comp?.status === "paused") {
+        return c.json(
+          {
+            error: "company_paused",
+            should_stop: true,
+            message: "The company is paused by its owner. Stop now; do not retry.",
+          },
+          409,
+        );
+      }
+    }
+
     // Safety gate (§7.3): irreversible / money-out tools below autonomy_level=
     // full don't execute — they park as a pending approval and the agent moves
     // on. An owner approves it later (the gateway then runs the handler).
