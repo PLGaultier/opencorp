@@ -5,9 +5,9 @@ import { API_URL } from "@/lib/data";
 
 /**
  * Owner controls (§5.2 — dashboard actions, never LLM tools): run a heartbeat
- * now, pause/resume the company (status + Temporal schedule), see the next
- * scheduled run, and chat with the CEO. Results stream into the terminal
- * below via the live ledger; the chat reply is also shown inline.
+ * now, pause/resume the company (status + Temporal schedule), and see the
+ * next scheduled run. Results stream into the terminal via the live ledger.
+ * The CEO chat lives in CeoChat, docked under the terminal.
  */
 
 interface ScheduleInfo {
@@ -38,9 +38,6 @@ export function CompanyControls({
   const [resolving, setResolving] = useState<string | null>(null);
   const [hbRunning, setHbRunning] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [chat, setChat] = useState<{ role: "owner" | "ceo"; text: string }[]>([]);
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
   const [needsAuth, setNeedsAuth] = useState(false);
 
   // owner actions require a session (cookie on the API origin)
@@ -126,29 +123,6 @@ export function CompanyControls({
       void loadSchedule();
     } finally {
       setBusy(false);
-    }
-  };
-
-  const sendChat = async () => {
-    const message = draft.trim();
-    if (!message || sending) return;
-    setDraft("");
-    setChat((c) => [...c, { role: "owner", text: message }]);
-    setSending(true);
-    try {
-      const res = await api("/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
-      const d = (await res.json()) as { reply?: string; createdTasks?: string[]; error?: string };
-      const reply = d.reply ?? `error: ${d.error ?? "chat failed"}`;
-      const queued = d.createdTasks?.length ? `\n[queued: ${d.createdTasks.join(" · ")}]` : "";
-      setChat((c) => [...c, { role: "ceo", text: reply + queued }]);
-    } catch {
-      setChat((c) => [...c, { role: "ceo", text: "error: API unreachable" }]);
-    } finally {
-      setSending(false);
     }
   };
 
@@ -242,27 +216,6 @@ export function CompanyControls({
           ))}
         </div>
       )}
-
-      <div className="chat">
-        {chat.map((m, i) => (
-          <div key={i} className={`chat-msg ${m.role}`}>
-            <span className="chat-role">{m.role}</span>
-            <span>{m.text}</span>
-          </div>
-        ))}
-        <div className="chat-input">
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendChat()}
-            placeholder='Message the CEO… (it can queue tasks, never pause itself or change caps)'
-            disabled={sending}
-          />
-          <button className="btn primary" onClick={sendChat} disabled={sending || !draft.trim()}>
-            {sending ? "…" : "Send"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

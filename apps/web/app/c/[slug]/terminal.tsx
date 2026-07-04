@@ -23,9 +23,13 @@ function actorClass(actor: string): string {
   return "a-system";
 }
 
+/** Compact bracketed tag, ops-floor style: [CEO ] [DEPT] [WRKR] [USER]. */
 function shortActor(actor: string): string {
-  if (actor.startsWith("worker:")) return `worker:${actor.slice(7, 15)}`;
-  return actor;
+  if (actor === "ceo") return "[CEO ]";
+  if (actor.startsWith("dept:")) return "[DEPT]";
+  if (actor.startsWith("worker:")) return "[WRKR]";
+  if (actor === "user") return "[USER]";
+  return "[SYS ]";
 }
 
 /** One ledger event → terminal lines (first line carries the actor prompt). */
@@ -135,10 +139,8 @@ export function CompanyTerminal({
   return (
     <div className="terminal">
       <div className="term-head">
-        <span className="term-dot r" />
-        <span className="term-dot y" />
-        <span className="term-dot g" />
-        <span className="term-title">opencorp — agent activity (hash-chained ledger)</span>
+        <span className={`term-live ${connected ? "on" : ""}`} />
+        <span className="term-title">Company floor — live agent activity</span>
         <span className="badge">
           {API_URL ? (connected ? "live" : "connecting…") : "demo replay"}
         </span>
@@ -156,7 +158,7 @@ export function CompanyTerminal({
           renderLines(e).map((line, i) => (
             <div className="tl" key={`${e.seq}:${i}`}>
               <span className="tl-time">{i === 0 ? hhmmss(e.createdAt) : ""}</span>
-              <span className={`tl-actor ${i === 0 ? actorClass(e.actor) : ""}`}>
+              <span className={`tl-actor ${i === 0 ? actorClass(e.actor) : ""}`} title={i === 0 ? e.actor : undefined}>
                 {i === 0 ? shortActor(e.actor) : ""}
               </span>
               <span className={`tl-body ${line.cls ?? ""}`}>{line.text}</span>
