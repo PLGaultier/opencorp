@@ -143,7 +143,7 @@ const AGENT_PALETTE: Palette = {
   g: "#b9862f", // crown gold
   u: "#3c4650", // suit
   t: "#b5473c", // tie
-  d: "#5d8d81", // department cap (sage)
+  d: "#3b5ba5", // department cap (pokéball blue)
   w: "#fbf8f0", // clipboard paper
   l: "#a8a394", // paper lines / vest stripe
   h: "#d9b356", // hard hat
