@@ -130,7 +130,7 @@ export function CompanyControls({
     return (
       <div className="controls">
         <span className="sub" style={{ margin: 0 }}>
-          Owner controls (run / pause / chat) are available when the dashboard is connected to an API.
+          Owner controls (run heartbeat / pause) are available when the dashboard is connected to an API.
         </span>
       </div>
     );

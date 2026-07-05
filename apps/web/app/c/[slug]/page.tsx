@@ -6,6 +6,7 @@ import { forwardCookie, isOwner } from "@/lib/server-auth";
 import { CompanyTerminal } from "./terminal";
 import { CompanyHud, heartsForRunway } from "./hud";
 import { TuneMenu } from "./tune-menu";
+import { CompanyControls } from "./controls";
 import { CompanyBadges } from "./badges";
 import { DashboardTabs, type MenuTab } from "./dashboard-tabs";
 import { TaskComposer } from "./task-composer";
@@ -323,14 +324,19 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
               balanceCents={company.balanceCents}
               dailyTaskCap={company.dailyTaskCap}
               paused={paused}
-              initialStatus={company.status}
             />
           ) : undefined
         }
       />
 
       {/* The centerpiece: CEO orders in via the terminal's own prompt, agent
-          activity out — one loop, live. */}
+          activity out — one loop, live. The deck above it holds the always-on
+          run/pause controls (results stream straight into the floor below). */}
+      {owner && (
+        <div className="floor-deck">
+          <CompanyControls companyId={cid} initialStatus={company.status} />
+        </div>
+      )}
       <CompanyTerminal companyId={cid} initialEvents={events} canOrder={owner} />
 
       {!owner && (

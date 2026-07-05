@@ -5,13 +5,12 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ModelBundle, ModelLevel } from "@/lib/data";
 import { EnginePanel } from "./engine-panel";
-import { CompanyControls } from "./controls";
 
 /**
  * The pause menu — a game-style overlay opened from the HUD's ⚙ TUNE button.
- * Everything that tunes the company lives here: the Engine (brains/provider/
- * runway), run/pause + heartbeat schedule + approvals, and the link to the
- * full settings page (name, mission, visibility).
+ * Holds the Engine (brains/provider/runway) and the link to the full settings
+ * page. Run/pause + heartbeat live in the always-visible deck next to the
+ * terminal (CompanyControls), not here.
  */
 export function TuneMenu({
   companyId,
@@ -21,7 +20,6 @@ export function TuneMenu({
   balanceCents,
   dailyTaskCap,
   paused,
-  initialStatus,
 }: {
   companyId: string;
   slug: string;
@@ -30,7 +28,6 @@ export function TuneMenu({
   balanceCents: number;
   dailyTaskCap: number;
   paused: boolean;
-  initialStatus: "active" | "paused";
 }) {
   const [open, setOpen] = useState(false);
 
@@ -68,7 +65,6 @@ export function TuneMenu({
               dailyTaskCap={dailyTaskCap}
               paused={paused}
             />
-            <CompanyControls companyId={companyId} initialStatus={initialStatus} />
 
             <p className="sub tune-foot">
               Name, mission &amp; visibility live in{" "}

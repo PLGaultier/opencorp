@@ -334,9 +334,16 @@ a.task-row:hover { background: var(--panel-2); }
 }
 .tune-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.9rem; }
 .tune-title { font-family: var(--pixel); font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink); }
-.tune-panel .engine, .tune-panel .controls { clip-path: none; box-shadow: none; border-color: var(--panel-2); }
-.tune-panel .controls { margin-top: 0.9rem; }
+.tune-panel .engine { clip-path: none; box-shadow: none; border-color: var(--panel-2); }
 .tune-foot { margin: 0.9rem 0 0; font-size: 0.78rem; }
+
+/* ── The deck — always-on run/pause controls welded above the terminal ───── */
+.floor-deck { margin-bottom: 0.6rem; }
+.floor-deck .controls {
+  padding: 0.55rem 0.8rem; clip-path: var(--notch-sm); box-shadow: var(--shadow-sm);
+}
+.floor-deck .controls-row { gap: 0.5rem; }
+.floor-deck .sched { font-size: 0.72rem; }
 
 /* ── HUD strip — name, HP hearts, gold (P&L) ─────────────────────────────── */
 .hud {
