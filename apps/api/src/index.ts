@@ -24,6 +24,7 @@ import {
   startWithdrawal,
 } from "@opencorp/workflows";
 import { PLANS, PgBillingStore, billingProviderFromEnv, runGrantCycle, subscribe } from "./billing";
+import { buildPnlSeries } from "./pnl";
 import {
   auth,
   requireAuth,
@@ -199,6 +200,56 @@ app.get("/api/companies/:slug/events", async (c) => {
       payload: r.payload,
       createdAt: r.created_at,
     })),
+  });
+});
+
+// §9.4 — daily cumulative P&L over a window, for the dashboard HUD sparkline.
+// Public (the P&L itself is public); same revenue/spend definitions as
+// PNL_COLUMNS: payments in, credit task charges/refunds out.
+app.get("/api/companies/:slug/pnl-series", async (c) => {
+  const [co] = await sql<{ id: string }[]>`
+    SELECT id FROM companies WHERE slug = ${c.req.param("slug")} AND is_public = true`;
+  if (!co) return c.json({ error: "not_found" }, 404);
+  const days = Math.min(Math.max(Number(c.req.query("days") ?? 30) || 30, 2), 90);
+
+  const rows = await sql<{ day: string; revenue_cents: string; spend_cents: string }[]>`
+    WITH bounds AS (
+      SELECT date_trunc('day', now()) - (${days - 1})::int * interval '1 day' AS start
+    ), rev AS (
+      SELECT date_trunc('day', created_at) AS day, SUM(amount_cents) AS cents
+      FROM payments WHERE company_id = ${co.id} AND created_at >= (SELECT start FROM bounds)
+      GROUP BY 1
+    ), sp AS (
+      SELECT date_trunc('day', created_at) AS day, -SUM(delta) AS cents
+      FROM credit_entries
+      WHERE company_id = ${co.id} AND reason IN ('task_charge','task_refund')
+        AND created_at >= (SELECT start FROM bounds)
+      GROUP BY 1
+    )
+    SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
+           COALESCE(rev.cents, 0) AS revenue_cents,
+           COALESCE(sp.cents, 0) AS spend_cents
+    FROM generate_series((SELECT start FROM bounds), date_trunc('day', now()), interval '1 day') AS d(day)
+    LEFT JOIN rev ON rev.day = d.day
+    LEFT JOIN sp ON sp.day = d.day
+    ORDER BY d.day`;
+
+  const [base] = await sql<{ pnl: string }[]>`
+    WITH bounds AS (
+      SELECT date_trunc('day', now()) - (${days - 1})::int * interval '1 day' AS start
+    )
+    SELECT COALESCE((SELECT SUM(amount_cents) FROM payments
+                     WHERE company_id = ${co.id} AND created_at < (SELECT start FROM bounds)), 0)
+         + COALESCE((SELECT SUM(delta) FROM credit_entries
+                     WHERE company_id = ${co.id} AND reason IN ('task_charge','task_refund')
+                       AND created_at < (SELECT start FROM bounds)), 0) AS pnl`;
+
+  return c.json({
+    days,
+    series: buildPnlSeries(
+      Number(base?.pnl ?? 0),
+      rows.map((r) => ({ day: r.day, revenueCents: Number(r.revenue_cents), spendCents: Number(r.spend_cents) })),
+    ),
   });
 });
 

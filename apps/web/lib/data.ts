@@ -473,6 +473,25 @@ export async function getCompanyEvents(
   }
 }
 
+/**
+ * Daily cumulative P&L (cents) for the HUD sparkline (§9.4). Returns [] when
+ * unavailable — the HUD falls back to deriving a trend from ledger money
+ * events.
+ */
+export async function getPnlSeries(slug: string, days = 30): Promise<number[]> {
+  if (!API_URL) return [];
+  try {
+    const res = await fetch(`${API_URL}/api/companies/${slug}/pnl-series?days=${days}`, {
+      next: { revalidate: 60 },
+    });
+    if (!res.ok) return [];
+    const { series } = (await res.json()) as { series: { day: string; pnlCents: number }[] };
+    return series.map((p) => p.pnlCents);
+  } catch {
+    return [];
+  }
+}
+
 export async function getProducts(slug: string): Promise<Product[]> {
   if (!API_URL) return demoProducts[slug] ?? [];
   try {
