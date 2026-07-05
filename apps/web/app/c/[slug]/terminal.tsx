@@ -100,17 +100,33 @@ function renderLines(e: TerminalEvent): { text: string; cls?: string }[] {
 
 const hhmmss = (iso: string) => new Date(iso).toTimeString().slice(0, 8);
 
+/** Optimistic order/reply lines shown until the ledger echoes them back. */
+interface LocalLine {
+  id: number;
+  role: "owner" | "ceo";
+  text: string;
+  at: string;
+}
+
 export function CompanyTerminal({
   companyId,
   initialEvents,
+  canOrder = false,
 }: {
   companyId: string | null;
   initialEvents: TerminalEvent[];
+  /** Owner only: dock the CEO command line inside the terminal. */
+  canOrder?: boolean;
 }) {
   const [events, setEvents] = useState(initialEvents);
   const [connected, setConnected] = useState(false);
+  const [local, setLocal] = useState<LocalLine[]>([]);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [needsAuth, setNeedsAuth] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+  const localId = useRef(0);
 
   // live tail: per-company SSE with enriched frames
   useEffect(() => {
@@ -121,6 +137,11 @@ export function CompanyTerminal({
       try {
         const e = JSON.parse((ev as MessageEvent).data) as TerminalEvent;
         if (typeof e.seq !== "number" || !e.eventType) return;
+        // the ledger echoes chat back as a ceo_chat event — drop our optimistic copy
+        if (e.eventType === "ceo_chat") {
+          const d = p(e);
+          setLocal((ls) => ls.filter((l) => l.text !== d.message && l.text !== d.reply));
+        }
         setEvents((prev) => (prev.some((x) => x.seq === e.seq) ? prev : [...prev, e].slice(-400)));
       } catch {
         /* ignore malformed frames */
@@ -134,7 +155,44 @@ export function CompanyTerminal({
   useEffect(() => {
     const el = bodyRef.current;
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [events]);
+  }, [events, local]);
+
+  // give the CEO an order from the terminal's own prompt (§5.2 chat)
+  const sendOrder = async () => {
+    const message = draft.trim();
+    if (!message || sending || !API_URL || !companyId) return;
+    setDraft("");
+    pinnedRef.current = true;
+    const now = new Date().toISOString();
+    setLocal((ls) => [...ls, { id: ++localId.current, role: "owner", text: message, at: now }]);
+    setSending(true);
+    try {
+      const res = await fetch(`${API_URL}/companies/${companyId}/chat`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        setNeedsAuth(true);
+        return;
+      }
+      const d = (await res.json()) as { reply?: string; createdTasks?: string[]; error?: string };
+      const reply = d.reply ?? `error: ${d.error ?? "chat failed"}`;
+      const queued = d.createdTasks?.length ? `\n[queued: ${d.createdTasks.join(" · ")}]` : "";
+      setLocal((ls) => [
+        ...ls,
+        { id: ++localId.current, role: "ceo", text: reply + queued, at: new Date().toISOString() },
+      ]);
+    } catch {
+      setLocal((ls) => [
+        ...ls,
+        { id: ++localId.current, role: "ceo", text: "error: API unreachable", at: new Date().toISOString() },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <div className="terminal">
@@ -153,7 +211,9 @@ export function CompanyTerminal({
           pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        {events.length === 0 && <div className="tl"><span className="tl-body dim">no events yet — run a heartbeat</span></div>}
+        {events.length === 0 && local.length === 0 && (
+          <div className="tl"><span className="tl-body dim">no events yet — run a heartbeat</span></div>
+        )}
         {events.map((e) =>
           renderLines(e).map((line, i) => (
             <div className="tl" key={`${e.seq}:${i}`}>
@@ -165,7 +225,49 @@ export function CompanyTerminal({
             </div>
           )),
         )}
+        {/* optimistic order/reply lines, until the ledger echoes them */}
+        {local.map((l) => (
+          <div className="tl" key={`local:${l.id}`}>
+            <span className="tl-time">{hhmmss(l.at)}</span>
+            <span className={`tl-actor ${l.role === "owner" ? "a-user" : "a-ceo"}`}>
+              {l.role === "owner" ? "[USER]" : "[CEO ]"}
+            </span>
+            <span className="tl-body">{l.text}</span>
+          </div>
+        ))}
+        {sending && (
+          <div className="tl">
+            <span className="tl-time" />
+            <span className="tl-actor a-ceo">[CEO ]</span>
+            <span className="tl-body dim">thinking…</span>
+          </div>
+        )}
       </div>
+
+      {canOrder && (
+        <div className="term-input">
+          {needsAuth ? (
+            <span className="term-note">
+              orders are limited to members — <a href="/login">sign in</a>
+            </span>
+          ) : (
+            <>
+              <span className="prompt">▸</span>
+              <input
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && sendOrder()}
+                placeholder={API_URL ? "give the CEO an order… (it can queue tasks, never pause itself)" : "demo replay — connect an API to give orders"}
+                disabled={sending || !API_URL}
+                aria-label="Give the CEO an order"
+              />
+              <button onClick={sendOrder} disabled={sending || !draft.trim() || !API_URL}>
+                {sending ? "…" : "⏎ send"}
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

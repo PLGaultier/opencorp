@@ -3,17 +3,15 @@ import { notFound } from "next/navigation";
 import { getAnalytics, getCompany, getCompanyEvents, getCompanyTasks, getEmails, getProducts, siteUrl, GITHUB_ENABLED, type TerminalEvent } from "@/lib/data";
 import { levelMeta } from "@/lib/levels";
 import { forwardCookie, isOwner } from "@/lib/server-auth";
-import { CompanyControls } from "./controls";
 import { CompanyTerminal } from "./terminal";
-import { CeoChat } from "./ceo-chat";
 import { CompanyHud, heartsForRunway } from "./hud";
+import { TuneMenu } from "./tune-menu";
 import { CompanyBadges } from "./badges";
 import { DashboardTabs, type MenuTab } from "./dashboard-tabs";
 import { TaskComposer } from "./task-composer";
 import { TaskList } from "./task-list";
 import { EmailPanel } from "./email-panel";
 import { CopyButton } from "./copy-button";
-import { EnginePanel } from "./engine-panel";
 
 const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 
@@ -285,20 +283,6 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
     </>
   );
 
-  const systemTab = (
-    <div className="system-grid">
-      <EnginePanel
-        companyId={cid}
-        initialLevel={company.modelLevel}
-        initialBundle={company.modelBundle}
-        balanceCents={company.balanceCents}
-        dailyTaskCap={company.dailyTaskCap}
-        paused={paused}
-      />
-      <CompanyControls companyId={cid} initialStatus={company.status} />
-    </div>
-  );
-
   const tabs: MenuTab[] = owner
     ? [
         { id: "tasks", label: "Tasks", content: tasksTab },
@@ -306,7 +290,6 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
         { id: "mail", label: "Mail", content: <EmailPanel slug={slug} address={emailAddress} emails={emails} /> },
         { id: "shop", label: "Shop", content: shopTab },
         { id: "stats", label: "Stats", content: statsTab },
-        { id: "system", label: "System", content: systemTab },
       ]
     : [
         { id: "site", label: "Site", content: siteTab },
@@ -330,11 +313,25 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
         pnlCents={pnlCents}
         spark={moneySpark(events)}
         owner={owner}
+        menu={
+          owner ? (
+            <TuneMenu
+              companyId={cid}
+              slug={slug}
+              initialLevel={company.modelLevel}
+              initialBundle={company.modelBundle}
+              balanceCents={company.balanceCents}
+              dailyTaskCap={company.dailyTaskCap}
+              paused={paused}
+              initialStatus={company.status}
+            />
+          ) : undefined
+        }
       />
 
-      {/* The centerpiece: CEO orders in, agent activity out — live. */}
-      <CompanyTerminal companyId={cid} initialEvents={events} />
-      {owner && <CeoChat companyId={cid} />}
+      {/* The centerpiece: CEO orders in via the terminal's own prompt, agent
+          activity out — one loop, live. */}
+      <CompanyTerminal companyId={cid} initialEvents={events} canOrder={owner} />
 
       {!owner && (
         <p className="sub" style={{ margin: "0.75rem 0 0" }}>

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { Coin, Heart, Mascot } from "../../sprites";
 
 /**
@@ -45,6 +46,7 @@ export function CompanyHud({
   pnlCents,
   spark,
   owner,
+  menu,
 }: {
   slug: string;
   name: string;
@@ -55,6 +57,8 @@ export function CompanyHud({
   pnlCents: number;
   spark: number[];
   owner: boolean;
+  /** Owner-only HUD action, e.g. the ⚙ TUNE pause-menu trigger. */
+  menu?: ReactNode;
 }) {
   const pnl = pnlCents / 100;
   return (
@@ -98,7 +102,7 @@ export function CompanyHud({
       {owner && (
         <div className="hud-links">
           <Link href={`/c/${slug}/insights`}>Insights</Link>
-          <Link href={`/c/${slug}/settings`}>Settings</Link>
+          {menu}
         </div>
       )}
     </header>

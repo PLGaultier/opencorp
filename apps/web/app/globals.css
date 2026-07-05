@@ -296,14 +296,47 @@ a.task-row:hover { background: var(--panel-2); }
 .a-system { color: var(--term-muted); }
 @media (max-width: 760px) { .tl { grid-template-columns: 1fr; gap: 0.1rem; } .tl-time, .tl-actor:empty { display: none; } }
 
-/* Give-an-order bar docked under the terminal */
-.order-bar { display: flex; gap: 0.6rem; margin-top: 0.75rem; }
-.order-bar input {
-  flex: 1; font-family: var(--mono); font-size: 0.85rem; color: var(--ink);
-  background: #fffdf6; border: 2px solid var(--border); padding: 0.5rem 0.8rem;
-  clip-path: var(--notch-sm);
+/* The terminal's own command line — give the CEO an order from inside the CRT */
+.term-input {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.55rem 1rem; background: var(--term-panel); border-top: 2px solid var(--term-border);
 }
-.order-bar input:focus { outline: none; border-color: var(--accent-deep); }
+.term-input .prompt { color: var(--term-green); font-family: var(--mono); font-size: 0.85rem; animation: pulse 1.4s steps(2, end) infinite; }
+.term-input input {
+  flex: 1; background: transparent; border: none;
+  font-family: var(--mono); font-size: 0.82rem; color: var(--term-text);
+  caret-color: var(--term-green); text-shadow: 0 0 5px rgba(143, 208, 124, 0.3);
+}
+.term-input input:focus { outline: none; }
+.term-input input::placeholder { color: var(--term-muted); text-shadow: none; }
+.term-input button {
+  font-family: var(--pixel); font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--term-text); background: transparent; border: 2px solid var(--term-muted);
+  padding: 0.28rem 0.6rem; cursor: pointer; clip-path: var(--notch-sm);
+}
+.term-input button:hover:not(:disabled) { border-color: var(--term-green); color: var(--term-green); }
+.term-input button:disabled { opacity: 0.4; cursor: default; }
+.term-note { font-family: var(--mono); font-size: 0.78rem; color: var(--term-muted); }
+.term-note a { color: var(--term-green); text-decoration: underline; }
+
+/* ── Pause-menu overlay — ⚙ tune the company ─────────────────────────────── */
+.tune-backdrop {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(33, 36, 29, 0.55);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 7vh 1rem 2rem; overflow-y: auto;
+}
+.tune-panel {
+  width: 100%; max-width: 460px;
+  background: var(--panel); border: 3px solid var(--border);
+  padding: 1.1rem 1.2rem; clip-path: var(--notch);
+  box-shadow: inset 0 0 0 2px #fffdf6, inset 0 0 0 4px rgba(33, 36, 29, 0.25);
+}
+.tune-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-bottom: 0.9rem; }
+.tune-title { font-family: var(--pixel); font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink); }
+.tune-panel .engine, .tune-panel .controls { clip-path: none; box-shadow: none; border-color: var(--panel-2); }
+.tune-panel .controls { margin-top: 0.9rem; }
+.tune-foot { margin: 0.9rem 0 0; font-size: 0.78rem; }
 
 /* ── HUD strip — name, HP hearts, gold (P&L) ─────────────────────────────── */
 .hud {
@@ -541,10 +574,6 @@ a.task:hover { border-color: var(--accent-deep); }
 .company-side .controls-row { flex-direction: column; align-items: stretch; }
 .company-side .controls-row .btn { width: 100%; }
 .company-side .sched { font-size: 0.76rem; color: var(--muted); margin-left: 0; }
-
-/* engine + controls side by side inside the SYSTEM tab */
-.system-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
-@media (max-width: 860px) { .system-grid { grid-template-columns: 1fr; } }
 
 /* ── Engine widget ───────────────────────────────────────────────────────── */
 .engine { border: 2px solid var(--border); background: var(--panel); padding: 0.9rem 1rem; clip-path: var(--notch); box-shadow: var(--shadow-sm); }

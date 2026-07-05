@@ -7,7 +7,7 @@ import { API_URL } from "@/lib/data";
  * Owner controls (§5.2 — dashboard actions, never LLM tools): run a heartbeat
  * now, pause/resume the company (status + Temporal schedule), and see the
  * next scheduled run. Results stream into the terminal via the live ledger.
- * The CEO chat lives in CeoChat, docked under the terminal.
+ * The CEO chat lives in the terminal's own command line (CompanyTerminal).
  */
 
 interface ScheduleInfo {
