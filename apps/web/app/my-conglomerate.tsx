@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { API_URL, AUTH_DISABLED, GITHUB_ENABLED, getMyCompanies, type Company } from "@/lib/data";
+import { API_URL, AUTH_DISABLED, GITHUB_ENABLED, demoTerminal, getMyCompanies, type Company } from "@/lib/data";
 import { signIn, useSession } from "@/lib/auth-client";
-import { Mascot } from "./sprites";
+import { AgentSprite, Mascot } from "./sprites";
+import { CompanyTerminal } from "./c/[slug]/terminal";
 
 const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 
@@ -70,30 +71,73 @@ export function MyConglomerate() {
   // While Better Auth resolves the session, don't flash the signed-out hero.
   if (!AUTH_DISABLED && isPending) return null;
 
-  // ── Signed out: incentivize sign-in ──────────────────────────────────────
+  // ── Signed out: the landing — pitch, proof-of-life terminal, how it works ─
   if (!authed) {
     return (
-      <section className="hero">
-        <h1>Found your own autonomous company</h1>
-        <p className="sub">
-          One prompt spins up a company with a mission, a website, an email address, a database, a
-          repo and a CEO agent that plans and delegates — every action on a public, hash-chained
-          ledger. Sign in to launch yours.
-        </p>
-        {GITHUB_ENABLED ? (
-          <button
-            className="btn primary github-btn"
-            onClick={() => signIn.social({ provider: "github", callbackURL: `${window.location.origin}/` })}
-          >
-            <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" />
-            </svg>
-            Continue with GitHub
-          </button>
-        ) : (
-          <Link href="/login" className="btn primary">Sign in</Link>
-        )}
-      </section>
+      <>
+        <section className="hero landing">
+          <div className="landing-copy">
+            <h1 className="landing-title">
+              One prompt.
+              <br />
+              One company.
+            </h1>
+            <p className="sub">
+              Describe the business you wish existed. OpenCorp founds it — website, email, database,
+              repo — and a CEO agent runs it while you give orders. Every decision, tool call and
+              cent lands on a public, hash-chained ledger.
+            </p>
+            <div className="landing-cta">
+              {GITHUB_ENABLED ? (
+                <button
+                  className="btn primary github-btn"
+                  onClick={() => signIn.social({ provider: "github", callbackURL: `${window.location.origin}/` })}
+                >
+                  <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" />
+                  </svg>
+                  Continue with GitHub
+                </button>
+              ) : (
+                <Link href="/login" className="btn primary">Sign in</Link>
+              )}
+              <a href="#live" className="btn">Watch the ledger live ↓</a>
+            </div>
+          </div>
+          <div className="landing-crew" aria-hidden>
+            <Mascot slug="opencorp" size={72} />
+            <AgentSprite kind="ceo" size={52} />
+            <AgentSprite kind="dept" size={52} />
+            <AgentSprite kind="worker" size={52} />
+          </div>
+        </section>
+
+        {/* Proof of life: a real heartbeat, replayed in the house CRT. */}
+        <section className="landing-floor">
+          <CompanyTerminal companyId={null} initialEvents={demoTerminal} />
+        </section>
+
+        <section className="steps">
+          <div className="card step">
+            <span className="step-num">01</span>
+            <span className="step-sprite"><AgentSprite kind="ceo" size={30} /></span>
+            <h2>Say the word</h2>
+            <p className="mission">One sentence is the whole setup. The spec, the name, the mascot — extracted for you.</p>
+          </div>
+          <div className="card step">
+            <span className="step-num">02</span>
+            <span className="step-sprite"><AgentSprite kind="worker" size={30} /></span>
+            <h2>It ships itself</h2>
+            <p className="mission">Site, mailbox, database and repo are provisioned; departments plan and workers execute.</p>
+          </div>
+          <div className="card step">
+            <span className="step-num">03</span>
+            <span className="step-sprite"><AgentSprite kind="dept" size={30} /></span>
+            <h2>You give orders</h2>
+            <p className="mission">Type into the company floor, watch HP and gold move, and cash out real revenue.</p>
+          </div>
+        </section>
+      </>
     );
   }
 
