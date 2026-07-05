@@ -88,13 +88,26 @@ export default async function InsightsPage({
       <div className="ins-grid">
         <div className="ins-card">
           <h2>Funnel</h2>
-          <div className="ins-funnel">
-            <div className="ins-step"><b>{funnel.visitors ?? "—"}</b><span>visitors</span></div>
-            <span className="ins-arrow">→</span>
-            <div className="ins-step"><b>{funnel.adClicks}</b><span>ad clicks</span></div>
-            <span className="ins-arrow">→</span>
-            <div className="ins-step"><b>{funnel.sales}</b><span>sales</span></div>
-          </div>
+          {(() => {
+            const steps = [
+              { label: "visitors", n: funnel.visitors },
+              { label: "ad clicks", n: funnel.adClicks },
+              { label: "sales", n: funnel.sales },
+            ];
+            const max = Math.max(1, ...steps.map((s) => s.n ?? 0));
+            return steps.map((s) => (
+              <div className="ins-bar-row" key={s.label}>
+                <span className="ins-bar-label">{s.label}</span>
+                <span className="ins-bar">
+                  <span
+                    className="ins-bar-fill"
+                    style={{ width: `${s.n == null ? 0 : Math.max(s.n > 0 ? 6 : 0, Math.round(((s.n ?? 0) / max) * 100))}%` }}
+                  />
+                </span>
+                <b>{s.n ?? "—"}</b>
+              </div>
+            ));
+          })()}
           <div className="ins-row" style={{ marginTop: "0.75rem" }}>
             <span>Conversion</span><b>{pct(funnel.conversion)}</b>
           </div>
@@ -142,16 +155,21 @@ export default async function InsightsPage({
         </div>
       </div>
 
-      {/* Recent activity */}
+      {/* Recent activity — replayed in the house CRT */}
       {activity.length > 0 && (
-        <div className="ins-grid">
-          <div className="ins-card wide">
-            <h2>Recent activity</h2>
-            <ul className="ins-feed">
-              {activity.map((a, i) => (
-                <li key={i}>{a.summary}</li>
-              ))}
-            </ul>
+        <div className="terminal mini-crt" style={{ marginTop: "1rem" }}>
+          <div className="term-head">
+            <span className="term-live" />
+            <span className="term-title">Recent activity — last {rangeDays} days</span>
+          </div>
+          <div className="term-body">
+            {activity.map((a, i) => (
+              <div className="tl" key={i}>
+                <span className="tl-time" />
+                <span className="tl-actor a-system">[LOG ]</span>
+                <span className="tl-body dim">{a.summary}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCompany, getEmails } from "@/lib/data";
 import { forwardCookie, isOwner } from "@/lib/server-auth";
+import { BadgeIcon } from "../../../sprites";
 
 const dt = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -28,28 +29,41 @@ export default async function InboxPage({ params }: { params: Promise<{ slug: st
         {sent.length} sent — every email on the ledger.
       </p>
 
-      <section>
-        <h2 style={{ fontSize: "1.05rem" }}>Received</h2>
-        {inbox.length === 0 && <p className="sub">No inbound emails yet.</p>}
-        {inbox.map((e) => (
-          <Link key={e.id} href={`/c/${slug}/inbox/${e.id}`} className={`email-row ${e.read ? "" : "unread"}`}>
-            <span className="email-from">{e.fromAddr}</span>
-            <span className="email-subject">{e.subject}{!e.read && <span className="unread-dot" />}</span>
-            <span className="email-date sub">{dt(e.createdAt)}</span>
-          </Link>
-        ))}
+      <section className="mail-box">
+        <h2 className="mail-head">
+          <BadgeIcon icon="mail" size={16} /> Received
+          <span className="task-chip">{inbox.length}</span>
+          {inbox.some((e) => !e.read) && (
+            <span className="task-chip unread-chip">{inbox.filter((e) => !e.read).length} unread</span>
+          )}
+        </h2>
+        <div className="mail-list">
+          {inbox.length === 0 && <p className="sub mail-empty">No inbound emails yet.</p>}
+          {inbox.map((e) => (
+            <Link key={e.id} href={`/c/${slug}/inbox/${e.id}`} className={`email-row ${e.read ? "" : "unread"}`}>
+              <span className="email-from">{e.fromAddr}</span>
+              <span className="email-subject">{e.subject}{!e.read && <span className="unread-dot" />}</span>
+              <span className="email-date sub">{dt(e.createdAt)}</span>
+            </Link>
+          ))}
+        </div>
       </section>
 
-      <section style={{ marginTop: "2rem" }}>
-        <h2 style={{ fontSize: "1.05rem" }}>Sent</h2>
-        {sent.length === 0 && <p className="sub">No outbound emails yet.</p>}
-        {sent.map((e) => (
-          <Link key={e.id} href={`/c/${slug}/inbox/${e.id}`} className="email-row">
-            <span className="email-from">→ {e.toAddrs.join(", ")}</span>
-            <span className="email-subject">{e.subject}</span>
-            <span className="email-date sub">{dt(e.createdAt)}</span>
-          </Link>
-        ))}
+      <section className="mail-box" style={{ marginTop: "2rem" }}>
+        <h2 className="mail-head">
+          <BadgeIcon icon="rocket" size={16} /> Sent
+          <span className="task-chip">{sent.length}</span>
+        </h2>
+        <div className="mail-list">
+          {sent.length === 0 && <p className="sub mail-empty">No outbound emails yet.</p>}
+          {sent.map((e) => (
+            <Link key={e.id} href={`/c/${slug}/inbox/${e.id}`} className="email-row">
+              <span className="email-from">→ {e.toAddrs.join(", ")}</span>
+              <span className="email-subject">{e.subject}</span>
+              <span className="email-date sub">{dt(e.createdAt)}</span>
+            </Link>
+          ))}
+        </div>
       </section>
     </main>
   );
