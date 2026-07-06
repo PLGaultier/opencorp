@@ -96,13 +96,19 @@ export function isDestructiveSql(sql: string): boolean {
   });
 }
 
-/** Resolve a company's conglomerate + connected Meta ad account (for ads-mcp). */
-async function adsContext(ctx: ToolContext): Promise<{ conglomerateId: string; metaAccount: string | null }> {
-  const [c] = await ctx.sql<{ conglomerate_id: string; meta_ad_account_id: string | null }[]>`
-    SELECT cm.conglomerate_id, cg.meta_ad_account_id
+/** Resolve a company's conglomerate + connected Meta ad account + Page (for ads-mcp). */
+async function adsContext(
+  ctx: ToolContext,
+): Promise<{ conglomerateId: string; metaAccount: string | null; pageId: string | null }> {
+  const [c] = await ctx.sql<{ conglomerate_id: string; meta_ad_account_id: string | null; facebook_page_id: string | null }[]>`
+    SELECT cm.conglomerate_id, cg.meta_ad_account_id, cg.facebook_page_id
     FROM companies cm JOIN conglomerates cg ON cg.id = cm.conglomerate_id
     WHERE cm.id = ${ctx.companyId}`;
-  return { conglomerateId: c!.conglomerate_id, metaAccount: c?.meta_ad_account_id ?? null };
+  return {
+    conglomerateId: c!.conglomerate_id,
+    metaAccount: c?.meta_ad_account_id ?? null,
+    pageId: c?.facebook_page_id ?? null,
+  };
 }
 
 /** True when this company's month-to-date ad spend + a new budget fits the cap. */
@@ -540,8 +546,8 @@ export const registry: Registry = {
           WHERE pr.id = ${args.productId} AND pr.company_id = ${ctx.companyId}`;
         if (!p) return { error: "product_not_found" };
         const campaignId = randomUUID();
-        const { conglomerateId, metaAccount } = await adsContext(ctx);
-        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        const { conglomerateId, metaAccount, pageId } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount, pageId);
         // Tag the destination with the campaign id so a sale through this ad is
         // attributed back to it for ROAS (§14). The checkout reads ?c=.
         const base = p.payment_link ?? `${ctx.checkoutBase}/pay/${p.slug}/${args.productId}`;
@@ -579,8 +585,8 @@ export const registry: Registry = {
         const [c] = await ctx.sql<{ provider_ref: string | null; budget_type: "daily" | "lifetime" }[]>`
           SELECT provider_ref, budget_type FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
         if (!c) return { error: "campaign_not_found" };
-        const { conglomerateId, metaAccount } = await adsContext(ctx);
-        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        const { conglomerateId, metaAccount, pageId } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount, pageId);
         if (c.provider_ref) await ads.setBudget(c.provider_ref, args.budgetCents, c.budget_type);
         await ctx.sql`UPDATE ad_campaigns SET budget_cents = ${args.budgetCents} WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
         await ctx.ledger.append({
@@ -605,8 +611,8 @@ export const registry: Registry = {
         const [c] = await ctx.sql<{ provider_ref: string | null }[]>`
           SELECT provider_ref FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
         if (!c) return { error: "campaign_not_found" };
-        const { conglomerateId, metaAccount } = await adsContext(ctx);
-        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        const { conglomerateId, metaAccount, pageId } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount, pageId);
         if (c.provider_ref) await ads.launch(c.provider_ref);
         await ctx.sql`UPDATE ad_campaigns SET status = 'active', launched_at = now() WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
         await ctx.ledger.append({
@@ -625,8 +631,8 @@ export const registry: Registry = {
         const [c] = await ctx.sql<{ provider_ref: string | null }[]>`
           SELECT provider_ref FROM ad_campaigns WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
         if (!c) return { error: "campaign_not_found" };
-        const { conglomerateId, metaAccount } = await adsContext(ctx);
-        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount);
+        const { conglomerateId, metaAccount, pageId } = await adsContext(ctx);
+        const ads = await adsFor(conglomerateId, ctx.secrets, metaAccount, pageId);
         if (c.provider_ref) await ads.pause(c.provider_ref);
         await ctx.sql`UPDATE ad_campaigns SET status = 'paused' WHERE id = ${args.campaignId} AND company_id = ${ctx.companyId}`;
         await ctx.ledger.append({

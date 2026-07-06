@@ -148,6 +148,10 @@ export const conglomerates = pgTable("conglomerates", {
   // attributed per company; spend caps are enforced per company in our ledger.
   // The META_ACCESS_TOKEN is a secret and lives in the vault, not here.
   metaAdAccountId: text("meta_ad_account_id"),
+  // The Facebook Page an ad creative is published from — required by Meta to
+  // build any ad. A plain identifier (not a secret). Null until the owner
+  // connects a Page; without it (or the ad account) ads fall back to the mock.
+  facebookPageId: text("facebook_page_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
