@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getAnalytics, getCompany, getCompanyEvents, getCompanyTasks, getEmails, getProducts, siteUrl, GITHUB_ENABLED, type TerminalEvent } from "@/lib/data";
+import { getAnalytics, getCompany, getCompanyEvents, getCompanyTasks, getEmails, getPnlSeries, getProducts, siteUrl, GITHUB_ENABLED, type TerminalEvent } from "@/lib/data";
 import { levelMeta } from "@/lib/levels";
 import { forwardCookie, isOwner } from "@/lib/server-auth";
 import { CompanyTerminal } from "./terminal";
@@ -48,10 +48,11 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
   if (!data) notFound();
   const { company, tasks } = data;
 
-  // Public data (everyone): the ledger + the storefront.
-  const [{ companyId, events }, products] = await Promise.all([
+  // Public data (everyone): the ledger + the storefront + the P&L trend.
+  const [{ companyId, events }, products, pnlSeries] = await Promise.all([
     getCompanyEvents(slug),
     getProducts(slug),
+    getPnlSeries(slug),
   ]);
 
   // Owner-only operational data: tasks, inbox, site analytics. Skipped entirely
@@ -312,7 +313,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ slug: 
         hearts={hearts}
         runwayLabel={runwayLabel}
         pnlCents={pnlCents}
-        spark={moneySpark(events)}
+        spark={pnlSeries.length > 1 ? pnlSeries : moneySpark(events)}
         owner={owner}
         menu={
           owner ? (
