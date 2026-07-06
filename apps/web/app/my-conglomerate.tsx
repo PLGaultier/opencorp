@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { API_URL, AUTH_DISABLED, GITHUB_ENABLED, getMyCompanies, type Company } from "@/lib/data";
 import { signIn, useSession } from "@/lib/auth-client";
+import { Mascot } from "./sprites";
 
 const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 
@@ -11,7 +12,7 @@ function CompanyCard({ c }: { c: Company }) {
   return (
     <Link href={`/c/${c.slug}`} className="card">
       <h2>
-        <span className={`dot ${c.status === "paused" ? "paused" : ""}`} />
+        <Mascot slug={c.slug} size={22} paused={c.status === "paused"} />
         {c.name}
       </h2>
       <p className="mission">{c.mission}</p>

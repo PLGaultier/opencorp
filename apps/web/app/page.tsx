@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getCompanies, getLedger } from "@/lib/data";
 import { LedgerFeed } from "./ledger-feed";
 import { MyConglomerate } from "./my-conglomerate";
+import { Mascot } from "./sprites";
 
 const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 
@@ -25,7 +26,7 @@ export default async function Dashboard() {
           {publicCompanies.map((c) => (
             <Link key={c.id} href={`/c/${c.slug}`} className="card">
               <h2>
-                <span className={`dot ${c.status === "paused" ? "paused" : ""}`} />
+                <Mascot slug={c.slug} size={22} paused={c.status === "paused"} />
                 {c.name}
               </h2>
               <p className="mission">{c.mission}</p>

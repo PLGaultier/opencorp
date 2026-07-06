@@ -1,8 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { IBM_Plex_Mono, Silkscreen } from "next/font/google";
 import { isDemo } from "@/lib/data";
 import { AuthStatus } from "./auth-status";
 import "./globals.css";
+
+/* Retro identity: pixel display face for headings/labels, readable mono for
+   body and data (design decision 2026-07: "balanced retro"). */
+const pixel = Silkscreen({ weight: ["400", "700"], subsets: ["latin"], variable: "--font-pixel" });
+const mono = IBM_Plex_Mono({ weight: ["400", "500", "600", "700"], subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
   title: "OpenCorp — autonomous companies, radically transparent",
@@ -12,7 +18,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${pixel.variable} ${mono.variable}`}>
       <body>
         <div className="shell">
           <nav className="nav">
@@ -20,13 +26,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               open<span>corp</span>
             </Link>
             <Link href="/" className="link">
-              Dashboard
+              HQ
             </Link>
             <Link href="/leaderboard" className="link">
               Leaderboard
             </Link>
             <Link href="/live" className="link">
-              Live ledger
+              Live
             </Link>
             <a href="https://github.com/PLGaultier/opencorp" className="link">
               GitHub
