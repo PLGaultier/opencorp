@@ -7,7 +7,8 @@ function timeAgo(iso: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return `${Math.floor(s)}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 
 function typeClass(t: string): string {
@@ -19,9 +20,11 @@ function typeClass(t: string): string {
 export function LedgerFeed({
   initialEvents,
   companySlug,
+  companyNames,
 }: {
   initialEvents: LedgerEvent[];
   companySlug?: string;
+  companyNames?: Record<string, string>;
 }) {
   const [events, setEvents] = useState(initialEvents);
   const [connected, setConnected] = useState(false);
@@ -66,7 +69,9 @@ export function LedgerFeed({
       {events.map((e) => (
         <div className="event" key={e.seq}>
           <span className={typeClass(e.eventType)}>{e.eventType}</span>
-          <span className="company">{e.companySlug ?? "system"}</span>
+          <span className="company">
+            {(e.companySlug && companyNames?.[e.companySlug]) || e.companySlug || "system"}
+          </span>
           <span>{e.summary}</span>
           <span className="hash" title={`seq ${e.seq}`}>
             {e.hash} · {timeAgo(e.createdAt)}

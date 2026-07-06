@@ -682,6 +682,30 @@ export interface RawLedgerEvent {
 }
 
 /**
+ * Turn a raw event payload into a short, human-readable line. The noisy types
+ * (tool calls and worker steps) carry huge blobs — a full SQL statement, a
+ * page of model "thinking" — that drown the feed, so we keep just the essence:
+ * which tool ran and how it went. Everything else falls back to a compact JSON
+ * dump minus internal bookkeeping fields.
+ */
+function summarizePayload(eventType: string, payload: unknown): string {
+  if (!payload || typeof payload !== "object") return String(payload ?? "");
+  const p = payload as Record<string, unknown>;
+  if (eventType === "tool_call") {
+    const tool = String(p.tool ?? "tool");
+    const server = p.server ? `${p.server}.` : "";
+    const outcome = p.outcome ? ` → ${p.outcome}` : "";
+    return `${server}${tool}${outcome}`;
+  }
+  if (eventType === "worker_step") {
+    const tool = p.tool ? ` · ${p.tool}` : "";
+    return `step ${p.n ?? "?"}${tool}`;
+  }
+  const { _redaction_v, ...rest } = p;
+  return JSON.stringify(rest).slice(0, 120);
+}
+
+/**
  * Map a raw ledger row into a display LedgerEvent. Shared by the snapshot fetch
  * and the live SSE stream so both surfaces render identical lines.
  */
@@ -691,7 +715,7 @@ export function toLedgerEvent(e: RawLedgerEvent): LedgerEvent {
     companySlug: e.companyId,
     actor: e.actor,
     eventType: e.eventType,
-    summary: JSON.stringify(e.payload).slice(0, 120),
+    summary: summarizePayload(e.eventType, e.payload),
     hash: e.hash.slice(0, 12),
     createdAt: e.createdAt,
   };

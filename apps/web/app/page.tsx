@@ -8,6 +8,11 @@ const eur = (cents: number) => `${(cents / 100).toFixed(2)} €`;
 
 export default async function Dashboard() {
   const [publicCompanies, events] = await Promise.all([getCompanies(), getLedger()]);
+  const companyNames: Record<string, string> = {};
+  for (const c of publicCompanies) {
+    companyNames[c.id] = c.name;
+    companyNames[c.slug] = c.name;
+  }
 
   return (
     <main>
@@ -42,7 +47,7 @@ export default async function Dashboard() {
       </section>
 
       <section id="live">
-        <LedgerFeed initialEvents={events} />
+        <LedgerFeed initialEvents={events} companyNames={companyNames} />
       </section>
     </main>
   );

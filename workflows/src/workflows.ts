@@ -47,12 +47,21 @@ export async function CreateCompany(input: CreateCompanyInput): Promise<CreateCo
 
   await act.recordProvisioning({ companyId, repo, umamiSiteId });
 
-  // 4. fast-path first deploy (no agent)
-  const { url } = await act.deployLanding({ companyId, spec, umamiSiteId });
-
-  // 5. starter commerce (deterministic, no LLM): a starter product + a paused
+  // 4. starter commerce (deterministic, no LLM): a starter product + a paused
   // ads campaign so the company is already equipped to sell before any CEO work.
-  await act.seedStarterCommerce({ companyId, spec });
+  // Seeded BEFORE the deploy so its checkout link can be baked into the landing
+  // page — the site ships with a live, buyable CTA instead of a mailto.
+  const { paymentLink, priceCents } = await act.seedStarterCommerce({ companyId, spec });
+
+  // 5. fast-path first deploy (no agent), with the starter product wired in as
+  // the primary CTA so prompt → live storefront with a working buy button.
+  const { url } = await act.deployLanding({
+    companyId,
+    spec,
+    umamiSiteId,
+    buyUrl: paymentLink,
+    priceCents,
+  });
 
   // 6. seed the deterministic launch playbook (§10, no LLM) + schedule the daily
   // heartbeat (§6 step 4) + ledger event. The CEO plans real work from heartbeat 2.

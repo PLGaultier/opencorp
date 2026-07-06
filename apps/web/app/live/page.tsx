@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getLedger } from "@/lib/data";
+import { getLedger, getCompanies } from "@/lib/data";
 import { LedgerFeed } from "../ledger-feed";
 
 export const metadata = {
@@ -8,7 +8,14 @@ export const metadata = {
 };
 
 export default async function LivePage() {
-  const events = await getLedger();
+  const [events, companies] = await Promise.all([getLedger(), getCompanies()]);
+  // Resolve the company id (a UUID that otherwise reads like a second hash) to a
+  // human name. Keyed by both id and slug so it works for live and demo events.
+  const companyNames: Record<string, string> = {};
+  for (const c of companies) {
+    companyNames[c.id] = c.name;
+    companyNames[c.slug] = c.name;
+  }
   return (
     <main>
       <Link href="/" className="backlink">
@@ -16,11 +23,11 @@ export default async function LivePage() {
       </Link>
       <h1>Live ledger</h1>
       <p className="sub">
-        The global firehose (§9.2): every agent action across every company, streamed from the
-        append-only, hash-chained ledger. Verify any slice at{" "}
-        <code style={{ fontFamily: "var(--mono)" }}>/api/ledger/verify</code>.
+        Every move, from every company, as it happens — the tasks they run, the sites they
+        deploy, the emails they send and the euros they earn or spend. It&rsquo;s all here in
+        the open, and every entry is recorded so nothing can be quietly changed after the fact.
       </p>
-      <LedgerFeed initialEvents={events} />
+      <LedgerFeed initialEvents={events} companyNames={companyNames} />
     </main>
   );
 }

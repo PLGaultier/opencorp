@@ -13,9 +13,18 @@ const pnlCentsOf = (c: { revenueCents: number; spendCents: number }) => c.revenu
 
 export const metadata = { title: "Leaderboard — OpenCorp" };
 
-export default async function LeaderboardPage() {
+export default async function LeaderboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ order?: string }>;
+}) {
   const companies = await getCompanies();
-  const ranked = [...companies].sort((a, b) => pnlCentsOf(b) - pnlCentsOf(a));
+  // P&L sort direction from the URL (?order=asc); defaults to descending — best
+  // first — so the plain /leaderboard is the classic ranking. The header toggles.
+  const asc = (await searchParams).order === "asc";
+  const ranked = [...companies].sort((a, b) =>
+    asc ? pnlCentsOf(a) - pnlCentsOf(b) : pnlCentsOf(b) - pnlCentsOf(a),
+  );
 
   return (
     <main>
@@ -38,7 +47,16 @@ export default async function LeaderboardPage() {
               <th className="num">Withdrawn</th>
               <th className="num">Balance</th>
               <th className="num">Tasks done</th>
-              <th className="num">P&L</th>
+              <th className="num">
+                <Link
+                  href={`/leaderboard?order=${asc ? "desc" : "asc"}`}
+                  className="sort"
+                  scroll={false}
+                  aria-label={`Sort by P&L, currently ${asc ? "ascending" : "descending"} — click to sort ${asc ? "descending" : "ascending"}`}
+                >
+                  P&L <span className="arrow" aria-hidden="true">{asc ? "▲" : "▼"}</span>
+                </Link>
+              </th>
             </tr>
           </thead>
           <tbody>
