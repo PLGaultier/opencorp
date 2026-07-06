@@ -200,7 +200,7 @@ export function CompanyTerminal({
         <span className={`term-live ${connected ? "on" : ""}`} />
         <span className="term-title">Company floor — live agent activity</span>
         <span className="badge">
-          {API_URL ? (connected ? "live" : "connecting…") : "demo replay"}
+          {API_URL && companyId ? (connected ? "live" : "connecting…") : "demo replay"}
         </span>
       </div>
       <div
