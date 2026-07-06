@@ -22,6 +22,7 @@ interface CreditData {
   runwayDays: number | null;
   breakdown: Record<string, number>;
   connectAccountId: string | null;
+  metaAdAccountId: string | null;
   subscription: { plan: string; status: string; currentPeriodStart: string | null } | null;
   entries: CreditEntry[];
 }
@@ -60,6 +61,8 @@ export default function CreditsPage() {
   const [subDone, setSubDone] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectMsg, setConnectMsg] = useState<string | null>(null);
+  const [connectingMeta, setConnectingMeta] = useState(false);
+  const [metaMsg, setMetaMsg] = useState<string | null>(null);
   const [toppingUp, setToppingUp] = useState<number | null>(null);
 
   useEffect(() => {
@@ -87,6 +90,18 @@ export default function CreditsPage() {
     };
     void load();
   }, [session, isPending]);
+
+  // Surface the outcome when Meta's OAuth callback bounces the owner back here
+  // (META_CONNECT_RETURN_URL), then strip the params so a refresh stays clean.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const meta = p.get("meta");
+    if (!meta) return;
+    if (meta === "connected") setMetaMsg("Meta connected ✓ — your companies can now run ads.");
+    else if (meta === "linked") setMetaMsg("Ad account linked — finish by setting the access token in the vault.");
+    else setMetaMsg(`Meta connect failed: ${p.get("reason") ?? "unknown error"}.`);
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
 
   const subscribeTo = async (planId: string) => {
     if (!data) return;
@@ -166,6 +181,31 @@ export default function CreditsPage() {
       setConnectMsg("API unreachable");
     }
     setConnecting(false);
+  };
+
+  const connectMeta = async () => {
+    if (!data) return;
+    setConnectingMeta(true);
+    setMetaMsg(null);
+    try {
+      const res = await fetch(`${API_URL}/api/conglomerates/${data.conglomerateId}/connect/meta/start`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+      });
+      const d = (await res.json()) as { mode?: string; authUrl?: string | null; message?: string; error?: string };
+      if (!res.ok) {
+        setMetaMsg(d.message ?? d.error ?? "Couldn't start Meta connect.");
+      } else if (d.mode === "meta" && d.authUrl) {
+        window.location.href = d.authUrl; // hand off to Facebook's OAuth dialog
+      } else {
+        // Connect off (no platform Meta app) — surface the gateway's explanation.
+        setMetaMsg(d.message ?? "Meta connect is not enabled on this instance.");
+      }
+    } catch {
+      setMetaMsg("API unreachable");
+    }
+    setConnectingMeta(false);
   };
 
   // ── Demo / unauthenticated states ──────────────────────────────────────────
@@ -296,6 +336,25 @@ export default function CreditsPage() {
         {connectMsg && <p className="sub" style={{ marginTop: "0.5rem" }}>{connectMsg}</p>}
       </section>
 
+      {/* Advertising — one Meta ad account per conglomerate (§14) */}
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Advertising</h2>
+        <p className="sub" style={{ marginTop: "0.25rem" }}>
+          Connect Meta so your companies can run real ad campaigns. One ad account and Facebook
+          Page cover every company in your conglomerate — Meta bills your payment method directly,
+          and spend stays inside each company&apos;s monthly budget cap.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.75rem" }}>
+          <button className="btn primary" onClick={connectMeta} disabled={connectingMeta}>
+            {connectingMeta ? "…" : data.metaAdAccountId ? "Reconnect Meta" : "Connect Meta"}
+          </button>
+          {data.metaAdAccountId && (
+            <span className="saved" style={{ margin: 0 }}>Meta linked ✓</span>
+          )}
+        </div>
+        {metaMsg && <p className="sub" style={{ marginTop: "0.5rem" }}>{metaMsg}</p>}
+      </section>
+
       {/* Plans */}
       {plans.length > 0 && (
         <section style={{ marginTop: "2rem" }}>
@@ -396,6 +455,15 @@ function DemoCreditView() {
         </p>
         <button className="btn primary" style={{ marginTop: "0.75rem" }} disabled>
           Connect your bank
+        </button>
+      </section>
+      <section style={{ marginTop: "2rem" }}>
+        <h2 style={{ fontSize: "1.05rem" }}>Advertising</h2>
+        <p className="sub" style={{ marginTop: "0.25rem" }}>
+          Connect Meta so your companies can run real ad campaigns — one ad account per conglomerate.
+        </p>
+        <button className="btn primary" style={{ marginTop: "0.75rem" }} disabled>
+          Connect Meta
         </button>
       </section>
       <section style={{ marginTop: "2rem" }}>
