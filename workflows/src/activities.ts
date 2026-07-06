@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHmac } from "node:crypto";
 import postgres from "postgres";
 import { defaultBundleFromEnv, extractCompanySpec, launchPlaybook, llmConfigFromEnv, type CompanySpec } from "@opencorp/llm";
 import { Ledger, PgStore, type LedgerEventInput } from "@opencorp/ledgerd";
@@ -26,6 +26,9 @@ const MAIL_DOMAIN = process.env.MAIL_DOMAIN ?? DOMAIN;
 // The gateway serves the local checkout page; starter payment links point here.
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3004";
 const CHECKOUT_BASE = process.env.CHECKOUT_BASE_URL ?? `${GATEWAY_URL}/checkout`;
+// Same shared secret the gateway signs its own money endpoints with, so the
+// founding worker can call /internal/products/provision without an agent.
+const GATEWAY_SECRET = process.env.GATEWAY_SECRET ?? "dev-gateway-secret";
 
 const sql = postgres(DATABASE_URL, { max: 5 });
 const ledger = new Ledger(new PgStore(DATABASE_URL));
@@ -222,35 +225,101 @@ export async function seedTasks(input: { companyId: string; spec: CompanySpec })
 }
 
 /**
+ * Sentinel for "this company's starter commerce is already seeded". Keyed on the
+ * starter ad campaign (provider-independent) rather than the product's
+ * provider_ref, which is now a real Stripe ref when a key is configured.
+ */
+async function existingStarter(
+  companyId: string,
+): Promise<{ payment_link: string | null; price_cents: string } | null> {
+  const [row] = await sql<{ payment_link: string | null; price_cents: string }[]>`
+    SELECT p.payment_link, p.price_cents
+    FROM ad_campaigns a JOIN products p ON p.id = a.product_id
+    WHERE a.company_id = ${companyId} AND a.name = 'Starter campaign'
+    LIMIT 1`;
+  return row ?? null;
+}
+
+/**
+ * Ask the gateway to create the external product: a real Stripe payment link
+ * (buy.stripe.com) when the company has a Stripe key, else the local checkout
+ * link. Signed with GATEWAY_SECRET so the Stripe key never leaves the gateway.
+ * Falls back to the deterministic local link if the gateway is unreachable, so
+ * founding never blocks on the payments arm.
+ */
+async function provisionStarterProduct(args: {
+  companyId: string;
+  productId: string;
+  slug: string;
+  name: string;
+  priceCents: number;
+}): Promise<{ providerRef: string; paymentLink: string; provider: string }> {
+  const localLink = `${CHECKOUT_BASE}/pay/${args.slug}/${args.productId}`;
+  try {
+    const raw = JSON.stringify({ ...args, currency: "eur" });
+    const sig = createHmac("sha256", GATEWAY_SECRET).update(raw).digest("hex");
+    const res = await fetch(`${GATEWAY_URL}/internal/products/provision`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-opencorp-sig": sig },
+      body: raw,
+    });
+    if (!res.ok) throw new Error(`gateway ${res.status}: ${await res.text()}`);
+    return (await res.json()) as { providerRef: string; paymentLink: string; provider: string };
+  } catch (err) {
+    console.warn(
+      `starter product provisioning fell back to local for ${args.slug}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return { providerRef: `local:starter:${args.productId}`, paymentLink: localLink, provider: "local" };
+  }
+}
+
+/**
  * Deterministic starter commerce (§6, §14) — seed a starter product + a *paused*
  * local ads campaign at creation, before any CEO work, so the company launches
- * already equipped to sell. Nothing spends or charges until the owner/CEO
- * activates it (the campaign starts paused; the product is just a listing).
- * Idempotent: a no-op once a starter product exists.
+ * already equipped to sell. The product's checkout link is a real Stripe payment
+ * link when the company has a Stripe key (money then arrives only via the signed
+ * Stripe webhook), or the local checkout link otherwise. Nothing spends or
+ * charges until the owner/CEO activates it (the campaign starts paused).
+ * Idempotent: a no-op once the starter campaign exists.
  */
 export async function seedStarterCommerce(input: {
   companyId: string;
   spec: CompanySpec;
 }): Promise<{ paymentLink: string; priceCents: number }> {
   const { companyId, spec } = input;
-  const productId = randomUUID();
-  const campaignId = randomUUID();
   const priceCents = Number(process.env.STARTER_PRODUCT_CENTS ?? 2900); // default tier; CEO can reprice
   const budgetCents = Number(process.env.STARTER_AD_DAILY_CENTS ?? 500); // daily budget; campaign is paused
-  const paymentLink = `${CHECKOUT_BASE}/pay/${spec.slug}/${productId}`;
+
+  // Idempotent re-run (Temporal retry, or an already-founded company): return the
+  // existing link + price. Checked BEFORE provisioning so a retry never mints a
+  // second Stripe product.
+  const already = await existingStarter(companyId);
+  if (already?.payment_link) return { paymentLink: already.payment_link, priceCents: Number(already.price_cents) };
+
+  const productId = randomUUID();
+  const campaignId = randomUUID();
+  const { providerRef, paymentLink, provider } = await provisionStarterProduct({
+    companyId,
+    productId,
+    slug: spec.slug,
+    name: `${spec.name} — Starter`,
+    priceCents,
+  });
   const creative = {
     headline: spec.landing_copy.headline,
     body: spec.landing_copy.subheadline || spec.mission.slice(0, 140),
-    linkUrl: `${paymentLink}?c=${campaignId}`, // ?c tag → ROAS attribution (§14)
+    // ?c tag → local ROAS attribution (§14); Stripe attributes via link metadata.
+    linkUrl: `${paymentLink}${paymentLink.includes("?") ? "&" : "?"}c=${campaignId}`,
   };
   const seeded = await sql.begin(async (tx) => {
     const [exists] = await tx`
-      SELECT 1 FROM products WHERE company_id = ${companyId} AND provider_ref LIKE 'local:starter:%'`;
+      SELECT 1 FROM ad_campaigns WHERE company_id = ${companyId} AND name = 'Starter campaign'`;
     if (exists) return false;
     await tx`
       INSERT INTO products (id, company_id, name, price_cents, currency, provider_ref, payment_link)
       VALUES (${productId}, ${companyId}, ${`${spec.name} — Starter`}, ${priceCents}, 'eur',
-              ${`local:starter:${productId}`}, ${paymentLink})`;
+              ${providerRef}, ${paymentLink})`;
     await tx`
       INSERT INTO ad_campaigns
         (id, company_id, product_id, provider, status, name, objective, budget_cents, budget_type, creative)
@@ -263,19 +332,15 @@ export async function seedStarterCommerce(input: {
       companyId,
       actor: "system",
       eventType: "starter_commerce_seeded",
-      payload: { productId, priceCents, paymentLink, campaignId, campaignStatus: "paused", budgetCents },
+      payload: { productId, priceCents, paymentLink, campaignId, campaignStatus: "paused", budgetCents, provider },
     });
     return { paymentLink, priceCents };
   }
-  // Idempotent re-run (Temporal retry, or an already-founded company): return the
-  // existing starter product's link + price so the caller can still wire the CTA.
-  const [existing] = await sql<{ payment_link: string; price_cents: string }[]>`
-    SELECT payment_link, price_cents FROM products
-    WHERE company_id = ${companyId} AND provider_ref LIKE 'local:starter:%'
-    LIMIT 1`;
+  // Lost a race to a concurrent attempt that seeded between our check and insert.
+  const raced = await existingStarter(companyId);
   return {
-    paymentLink: existing?.payment_link ?? paymentLink,
-    priceCents: existing ? Number(existing.price_cents) : priceCents,
+    paymentLink: raced?.payment_link ?? paymentLink,
+    priceCents: raced ? Number(raced.price_cents) : priceCents,
   };
 }
 

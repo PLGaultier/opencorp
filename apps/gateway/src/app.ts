@@ -8,6 +8,7 @@ import { registry, type ToolContext } from "./tools";
 import { PgRateLimiter } from "./ratelimit";
 import { secretStoreFromEnv, infisicalEnv, InfisicalClient, InfisicalAdmin } from "./secrets";
 import { makeBrowser } from "./providers/browser";
+import { paymentsFor } from "./providers/payments";
 import { recordPayment } from "./revenue";
 import { processWithdrawal } from "./payout";
 import { ensureConnectOnboarding } from "./connect";
@@ -220,6 +221,39 @@ export function createGateway(opts?: {
     const parsed = PaymentBody.safeParse(JSON.parse(raw || "{}"));
     if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
     return c.json(await recordPayment(sql, ledger, parsed.data));
+  });
+
+  // Provision the external product for a starter (§6, §10). The founding worker
+  // — not an agent — calls this, signed under GATEWAY_SECRET, so the company's
+  // Stripe key stays server-side here. When the company has a Stripe key this
+  // mints a real buy.stripe.com payment link (money then arrives only via the
+  // signed /webhooks/stripe mirror); otherwise it returns the local checkout
+  // link. It creates ONLY the external product — the worker owns the DB rows.
+  const ProvisionProductBody = z.object({
+    companyId: z.string().uuid(),
+    productId: z.string().uuid(),
+    slug: z.string().min(1),
+    name: z.string().min(1).max(200),
+    priceCents: z.number().int().positive(),
+    currency: z.enum(["eur", "usd", "gbp"]).default("eur"),
+  });
+
+  app.post("/internal/products/provision", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
+    const parsed = ProvisionProductBody.safeParse(JSON.parse(raw || "{}"));
+    if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+    const p = parsed.data;
+    const provider = await paymentsFor(p.companyId, secrets, checkoutBase);
+    const { providerRef, paymentLink } = await provider.createProduct({
+      productId: p.productId,
+      companyId: p.companyId,
+      slug: p.slug,
+      name: p.name,
+      priceCents: p.priceCents,
+      currency: p.currency,
+    });
+    return c.json({ providerRef, paymentLink, provider: provider.kind });
   });
 
   // ── Local checkout page (§10, MVP) ────────────────────────────────────────
