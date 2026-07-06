@@ -20,9 +20,11 @@ function typeClass(t: string): string {
 export function LedgerFeed({
   initialEvents,
   companySlug,
+  companyNames,
 }: {
   initialEvents: LedgerEvent[];
   companySlug?: string;
+  companyNames?: Record<string, string>;
 }) {
   const [events, setEvents] = useState(initialEvents);
   const [connected, setConnected] = useState(false);
@@ -67,7 +69,9 @@ export function LedgerFeed({
       {events.map((e) => (
         <div className="event" key={e.seq}>
           <span className={typeClass(e.eventType)}>{e.eventType}</span>
-          <span className="company">{e.companySlug ?? "system"}</span>
+          <span className="company">
+            {(e.companySlug && companyNames?.[e.companySlug]) || e.companySlug || "system"}
+          </span>
           <span>{e.summary}</span>
           <span className="hash" title={`seq ${e.seq}`}>
             {e.hash} · {timeAgo(e.createdAt)}
