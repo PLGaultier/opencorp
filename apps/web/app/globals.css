@@ -472,6 +472,59 @@ a.task-row:hover { background: var(--panel-2); }
 .card.step h2 { margin: 0.35rem 0 0; }
 .card.step .mission { margin-bottom: 0; }
 
+/* ── Subpage passes: mission dossier, insights, mail ─────────────────────── */
+.mini-crt .term-body { max-height: 320px; }
+.mini-crt .tl { grid-template-columns: 7.6rem 5.4rem 1fr; }
+.term-link { color: var(--term-green); text-decoration: underline; }
+
+.mission-head { display: flex; align-items: flex-start; gap: 0.9rem; }
+.mission-head h1 { line-height: 1.4; }
+
+.task-edit { margin-top: 1.5rem; }
+.task-edit summary {
+  cursor: pointer; display: inline-block; list-style: none;
+  font-family: var(--pixel); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); background: var(--panel-2); border: 2px solid var(--border);
+  padding: 0.45rem 0.85rem; clip-path: var(--notch-sm); box-shadow: var(--shadow-sm);
+}
+.task-edit summary::-webkit-details-marker { display: none; }
+.task-edit summary:hover { color: var(--ink); }
+.task-edit[open] summary { background: var(--panel); color: var(--ink); }
+.task-edit .auth-form { margin-top: 1rem; }
+
+/* insights: pixel funnel bars */
+.ins-bar-row { display: grid; grid-template-columns: 5.2rem 1fr 3rem; gap: 0.6rem; align-items: center; padding: 0.22rem 0; font-size: 0.82rem; }
+.ins-bar-row b { text-align: right; font-variant-numeric: tabular-nums; }
+.ins-bar-label { color: var(--muted); font-size: 0.74rem; }
+.ins-bar { display: block; height: 12px; border: 1px solid var(--border); background: var(--panel-2); }
+.ins-bar-fill {
+  display: block; height: 100%; background: var(--accent);
+  /* pixel-segment look */
+  background-image: repeating-linear-gradient(90deg, transparent 0 6px, rgba(33, 36, 29, 0.28) 6px 7px);
+}
+
+/* mail: framed boxes + letter view */
+.mail-head { font-family: var(--pixel); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.6rem; }
+.mail-list { border: 2px solid var(--border); background: var(--panel); clip-path: var(--notch); box-shadow: var(--shadow-sm); padding: 0.25rem 1rem; }
+.mail-list .email-row:last-child { border-bottom: none; }
+.mail-empty { margin: 0.6rem 0; }
+.task-chip.unread-chip { border-color: var(--accent-deep); color: var(--accent-deep); }
+
+.letter {
+  border: 3px solid var(--border); background: #fffdf6; clip-path: var(--notch);
+  box-shadow: inset 0 0 0 2px #fffdf6, inset 0 0 0 4px rgba(33, 36, 29, 0.25), var(--shadow);
+  margin-top: 1rem;
+}
+.letter-meta {
+  display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: center;
+  padding: 0.85rem 1.25rem; background: var(--panel-2); border-bottom: 2px solid var(--border);
+}
+.letter-meta > div { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.letter-meta .sub { margin: 0; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.letter-meta b { font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; }
+.letter-meta .hud-status { margin-left: auto; }
+.letter-body { margin: 0; padding: 1.25rem 1.4rem 1.5rem; white-space: pre-wrap; line-height: 1.7; font-size: 0.92rem; }
+
 /* ── Founding flow (/new — the "new save file" screen) ───────────────────── */
 .found-form { margin-top: 1.5rem; }
 .found-mascot { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; }
