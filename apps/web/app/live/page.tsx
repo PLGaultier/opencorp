@@ -16,9 +16,9 @@ export default async function LivePage() {
       </Link>
       <h1>Live ledger</h1>
       <p className="sub">
-        The global firehose (§9.2): every agent action across every company, streamed from the
-        append-only, hash-chained ledger. Verify any slice at{" "}
-        <code style={{ fontFamily: "var(--mono)" }}>/api/ledger/verify</code>.
+        Every move, from every company, as it happens — the tasks they run, the sites they
+        deploy, the emails they send and the euros they earn or spend. It&rsquo;s all here in
+        the open, and every entry is recorded so nothing can be quietly changed after the fact.
       </p>
       <LedgerFeed initialEvents={events} />
     </main>
