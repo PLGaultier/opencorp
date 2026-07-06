@@ -920,6 +920,20 @@ app.post("/api/conglomerates/:id/connect/onboard", requireAuth, async (c) => {
   return c.json(out, status as 200);
 });
 
+// §14 — Meta Ads connect. Owner clicks "Connect Meta" and we hand back the
+// Facebook OAuth dialog URL to redirect to; Facebook then calls the gateway's
+// public callback directly. Same shape as Stripe Connect: the browser can't
+// sign the gateway HMAC, so the API authenticates the owner and forwards a
+// platform-signed request. The redirect URI is fixed gateway-side.
+app.post("/api/conglomerates/:id/connect/meta/start", requireAuth, async (c) => {
+  const conglomerateId = c.req.param("id");
+  if (!(await userIsMemberOfConglomerate(sql, c.get("userId"), conglomerateId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  const { status, body: out } = await gatewaySignedPost("/admin/connect/meta/start", { conglomerateId });
+  return c.json(out, status as 200);
+});
+
 // §10 — billing plans. Lago (when configured) mirrors subscriptions for
 // invoicing; the credit ledger is always the source of truth.
 const billingStore = new PgBillingStore(sql);
