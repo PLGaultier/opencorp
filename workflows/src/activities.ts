@@ -171,6 +171,9 @@ export async function deployLanding(input: {
   companyId: string;
   spec: CompanySpec;
   umamiSiteId: string | null;
+  /** Starter checkout link + price, so the landing ships with a live buy CTA. */
+  buyUrl?: string;
+  priceCents?: number;
 }): Promise<{ url: string }> {
   const { spec } = input;
   const res = await fetch(`${DEPLOYD_URL}/deploy/landing`, {
@@ -181,6 +184,8 @@ export async function deployLanding(input: {
       companyName: spec.name,
       emailAddress: `${spec.slug}@${DOMAIN}`,
       umamiSiteId: input.umamiSiteId ?? undefined,
+      buyUrl: input.buyUrl,
+      priceCents: input.priceCents,
       copy: spec.landing_copy,
     }),
   });
@@ -223,7 +228,10 @@ export async function seedTasks(input: { companyId: string; spec: CompanySpec })
  * activates it (the campaign starts paused; the product is just a listing).
  * Idempotent: a no-op once a starter product exists.
  */
-export async function seedStarterCommerce(input: { companyId: string; spec: CompanySpec }): Promise<void> {
+export async function seedStarterCommerce(input: {
+  companyId: string;
+  spec: CompanySpec;
+}): Promise<{ paymentLink: string; priceCents: number }> {
   const { companyId, spec } = input;
   const productId = randomUUID();
   const campaignId = randomUUID();
@@ -257,7 +265,18 @@ export async function seedStarterCommerce(input: { companyId: string; spec: Comp
       eventType: "starter_commerce_seeded",
       payload: { productId, priceCents, paymentLink, campaignId, campaignStatus: "paused", budgetCents },
     });
+    return { paymentLink, priceCents };
   }
+  // Idempotent re-run (Temporal retry, or an already-founded company): return the
+  // existing starter product's link + price so the caller can still wire the CTA.
+  const [existing] = await sql<{ payment_link: string; price_cents: string }[]>`
+    SELECT payment_link, price_cents FROM products
+    WHERE company_id = ${companyId} AND provider_ref LIKE 'local:starter:%'
+    LIMIT 1`;
+  return {
+    paymentLink: existing?.payment_link ?? paymentLink,
+    priceCents: existing ? Number(existing.price_cents) : priceCents,
+  };
 }
 
 export async function appendLedger(input: LedgerEventInput): Promise<void> {

@@ -49,6 +49,8 @@ const DeployLanding = z.object({
   companyName: z.string(),
   emailAddress: z.string().optional(),
   umamiSiteId: z.string().optional(),
+  buyUrl: z.string().optional(),
+  priceCents: z.number().optional(),
   copy: z.object({
     headline: z.string(),
     subheadline: z.string(),
@@ -98,6 +100,8 @@ app.post("/deploy/landing", async (c) => {
     umamiUrl: process.env.UMAMI_URL,
     copy: d.copy,
     ogImageUrl,
+    buyUrl: d.buyUrl,
+    priceCents: d.priceCents,
   });
   const { root } = await publishSite({ slug: d.slug, files });
   return c.json({ ok: true, root, url: siteUrl(d.slug) });

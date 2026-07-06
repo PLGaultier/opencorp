@@ -29,6 +29,34 @@ describe("renderLanding", () => {
     expect(html).not.toContain("<style>"); // styling lives in the design system
   });
 
+  test("wires the buy link + price as the CTA when a checkout URL is given", () => {
+    const html = renderLanding({
+      companyName: "Synth Co",
+      slug: "synth-co",
+      copy,
+      emailAddress: "synth-co@opencorp.app",
+      buyUrl: "https://gw.opencorp.app/checkout/pay/synth-co/abc",
+      priceCents: 2900,
+    });
+    // Primary CTA points at checkout, not a mailto, and shows the price.
+    expect(html).toContain('href="https://gw.opencorp.app/checkout/pay/synth-co/abc"');
+    expect(html).toContain("Subscribe — €29.00");
+    expect(html).not.toContain('class="btn btn--lg" href="mailto:');
+    // Email stays reachable as a secondary support line.
+    expect(html).toContain("mailto:synth-co@opencorp.app");
+  });
+
+  test("falls back to the mailto CTA when no checkout URL is given", () => {
+    const html = renderLanding({
+      companyName: "Synth Co",
+      slug: "synth-co",
+      copy,
+      emailAddress: "synth-co@opencorp.app",
+    });
+    expect(html).toContain('class="btn btn--lg" href="mailto:synth-co@opencorp.app"');
+    expect(html).not.toContain("checkout/pay");
+  });
+
   test("includes umami snippet only when configured", () => {
     const without = renderLanding({ companyName: "X", slug: "x-co", copy });
     expect(without).not.toContain("data-website-id");

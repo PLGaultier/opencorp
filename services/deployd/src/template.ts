@@ -19,6 +19,15 @@ export interface LandingInput {
   umamiUrl?: string;
   /** Absolute URL of the generated share card (og.png), if one was rendered. */
   ogImageUrl?: string;
+  /**
+   * Checkout URL for the starter product. Seeded deterministically at founding
+   * (gateway /checkout/pay/…), so the site ships with a live, buyable CTA — no
+   * agent work needed. When absent (offline/no product) the CTA falls back to
+   * the mailto contact link.
+   */
+  buyUrl?: string;
+  /** Starter product price in cents, shown on the buy button (assumed EUR). */
+  priceCents?: number;
 }
 
 const esc = (s: string) =>
@@ -59,9 +68,24 @@ export function renderLanding(input: LandingInput): string {
     </div>
   </section>`
     : "";
-  const contact = input.emailAddress
-    ? `<a class="btn btn--lg" href="mailto:${esc(input.emailAddress)}">${esc(copy.cta)}</a>`
-    : `<a class="btn btn--lg" href="#contact">${esc(copy.cta)}</a>`;
+  // Primary CTA. If a starter checkout link exists (seeded at founding), the
+  // button buys the product directly — a live storefront on day one. Otherwise
+  // it falls back to the mailto/anchor contact, as before.
+  const priceLabel =
+    typeof input.priceCents === "number"
+      ? ` — ${new Intl.NumberFormat("en", { style: "currency", currency: "EUR" }).format(input.priceCents / 100)}`
+      : "";
+  const cta = input.buyUrl
+    ? `<a class="btn btn--lg" href="${esc(input.buyUrl)}">${esc(copy.cta)}${priceLabel}</a>`
+    : input.emailAddress
+      ? `<a class="btn btn--lg" href="mailto:${esc(input.emailAddress)}">${esc(copy.cta)}</a>`
+      : `<a class="btn btn--lg" href="#contact">${esc(copy.cta)}</a>`;
+  // Keep a lightweight email contact available even when the CTA is a buy button,
+  // so prospective customers can still reach the company for support/questions.
+  const contactLine =
+    input.buyUrl && input.emailAddress
+      ? `<p class="sub">Questions? <a href="mailto:${esc(input.emailAddress)}">${esc(input.emailAddress)}</a></p>`
+      : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -87,7 +111,7 @@ ${umami}
   <div class="container">
     <nav class="nav">
       <a class="brand" href="/">${esc(input.companyName)}</a>
-      ${contact.replace(" btn--lg", "")}
+      ${cta.replace(" btn--lg", "")}
     </nav>
   </div>
 </header>
@@ -97,7 +121,7 @@ ${umami}
       <span class="badge">${icon("sparkles")} Autonomous company</span>
       <h1 class="mt-headline">${esc(copy.headline)}</h1>
       <p class="sub">${esc(copy.subheadline)}</p>
-      ${contact}
+      ${cta}
     </div>
   </section>
   ${sections}
@@ -105,7 +129,8 @@ ${umami}
     <div class="container text-center stack">
       <h2>${esc(copy.cta)}</h2>
       <p>${esc(copy.subheadline)}</p>
-      ${contact}
+      ${cta}
+      ${contactLine}
     </div>
   </section>
 </main>
