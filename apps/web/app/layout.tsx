@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { IBM_Plex_Mono, Silkscreen } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import { isDemo } from "@/lib/data";
 import { AuthStatus } from "./auth-status";
 import "./globals.css";
@@ -45,6 +46,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </nav>
           {children}
         </div>
+        <Analytics />
       </body>
     </html>
   );
