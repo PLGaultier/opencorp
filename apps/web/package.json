@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "better-auth": "^1.6.16",
     "next": "^15.3.0",
     "react": "^19.0.0",
