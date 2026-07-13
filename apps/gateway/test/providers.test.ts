@@ -4,7 +4,7 @@ import { isValidAddress, listUnsubscribeHeader } from "../src/providers/email";
 import { paymentsFor, isTerminalStripeError } from "../src/providers/payments";
 import { EnvSecretStore } from "../src/secrets";
 import { registry } from "../src/tools";
-import { DEFAULT_LIMITS } from "../src/ratelimit";
+import { DEFAULT_LIMITS } from "@opencorp/ratelimit";
 
 describe("browser egress guard (§8)", () => {
   test("allows public http(s)", () => {

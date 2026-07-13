@@ -3,11 +3,17 @@ import type { Sql } from "postgres";
 /**
  * Sliding-window limiter (§7.2). Two stores behind one contract:
  *   - MemoryRateLimiter  in-process; correct for a single instance (tests/dev).
- *   - PgRateLimiter      Postgres-backed; durable across gateway restarts and
- *                        shared across instances, with no extra dependency
- *                        (Valkey would scale further but the local MVP keeps to
- *                        Postgres + Temporal). This is what the gateway uses.
+ *   - PgRateLimiter      Postgres-backed; durable across restarts and shared
+ *                        across instances, with no extra dependency (Valkey
+ *                        would scale further but the local MVP keeps to Postgres
+ *                        + Temporal). This is what the gateway and API use.
  * Failed calls count: the call is recorded before the tool executes.
+ *
+ * Shared package: the gateway throttles per-company worker *tool* calls; the API
+ * throttles per-conglomerate owner *endpoints* (chat / heartbeat / company
+ * creation) that fan out to real LLM calls. Both pass a `scopeId` — the gateway
+ * a companyId, the API a conglomerateId — with distinct `tool` strings, so their
+ * rows coexist in `rate_limit_hits` without colliding.
  */
 
 export interface ToolLimits {
@@ -61,9 +67,9 @@ const WINDOWS: { name: "hour" | "day"; ms: number }[] = [
   { name: "day", ms: 86_400_000 },
 ];
 
-/** One contract, two stores — so the gateway can swap memory↔Postgres. */
+/** One contract, two stores — so callers can swap memory↔Postgres. */
 export interface RateLimiter {
-  check(companyId: string, tool: string): RateLimitError | null | Promise<RateLimitError | null>;
+  check(scopeId: string, tool: string): RateLimitError | null | Promise<RateLimitError | null>;
 }
 
 /** Single source of truth for the error payload, shared by both stores. */
@@ -92,9 +98,9 @@ export class MemoryRateLimiter implements RateLimiter {
   private calls = new Map<string, number[]>();
 
   /** Records the call and returns an error if any window is exceeded. */
-  check(companyId: string, tool: string, limits = DEFAULT_LIMITS): RateLimitError | null {
+  check(scopeId: string, tool: string, limits = DEFAULT_LIMITS): RateLimitError | null {
     const cfg = limits[tool];
-    const key = `${companyId}:${tool}`;
+    const key = `${scopeId}:${tool}`;
     const now = Date.now();
     const dayAgo = now - 86_400_000;
     const stamps = (this.calls.get(key) ?? []).filter((t) => t > dayAgo);
@@ -117,9 +123,13 @@ export class MemoryRateLimiter implements RateLimiter {
 /**
  * Postgres-backed limiter (§7.2). One row per recorded call in `rate_limit_hits`;
  * windows are counted with timestamp filters so the count survives restarts and
- * is consistent across gateway instances. The just-recorded call is included
- * (it's inserted before the count). Rows past the widest window are pruned
+ * is consistent across instances. The just-recorded call is included (it's
+ * inserted before the count). Rows past the widest window are pruned
  * opportunistically so storage stays bounded without a separate cron.
+ *
+ * NB the `company_id` column is a historical name — it stores whatever `scopeId`
+ * the caller passes (a companyId for gateway tools, a conglomerateId for API
+ * endpoints). No FK, so any scope is valid.
  */
 export class PgRateLimiter implements RateLimiter {
   constructor(
@@ -127,15 +137,15 @@ export class PgRateLimiter implements RateLimiter {
     private limits = DEFAULT_LIMITS,
   ) {}
 
-  async check(companyId: string, tool: string): Promise<RateLimitError | null> {
+  async check(scopeId: string, tool: string): Promise<RateLimitError | null> {
     const cfg = this.limits[tool];
     if (!cfg) return null; // only limited tools touch the DB
 
-    await this.sql`INSERT INTO rate_limit_hits (company_id, tool) VALUES (${companyId}, ${tool})`;
+    await this.sql`INSERT INTO rate_limit_hits (company_id, tool) VALUES (${scopeId}, ${tool})`;
     if (Math.random() < 0.05) {
       await this.sql`
         DELETE FROM rate_limit_hits
-        WHERE company_id = ${companyId} AND tool = ${tool}
+        WHERE company_id = ${scopeId} AND tool = ${tool}
           AND created_at < now() - interval '24 hours'`;
     }
 
@@ -147,7 +157,7 @@ export class PgRateLimiter implements RateLimiter {
         min(created_at) FILTER (WHERE created_at > now() - interval '1 hour') AS hour_oldest,
         count(*) FILTER (WHERE created_at > now() - interval '24 hours') AS day_n,
         min(created_at) FILTER (WHERE created_at > now() - interval '24 hours') AS day_oldest
-      FROM rate_limit_hits WHERE company_id = ${companyId} AND tool = ${tool}`;
+      FROM rate_limit_hits WHERE company_id = ${scopeId} AND tool = ${tool}`;
 
     const hourN = Number(r!.hour_n);
     const dayN = Number(r!.day_n);

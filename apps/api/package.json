@@ -10,6 +10,7 @@
     "@opencorp/insights": "workspace:*",
     "@opencorp/ledgerd": "workspace:*",
     "@opencorp/llm": "workspace:*",
+    "@opencorp/ratelimit": "workspace:*",
     "@opencorp/schema": "workspace:*",
     "@opencorp/stalwart": "workspace:*",
     "@opencorp/workflows": "workspace:*",
