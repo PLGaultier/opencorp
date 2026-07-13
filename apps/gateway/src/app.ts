@@ -5,7 +5,7 @@ import { z } from "zod";
 import { Ledger, PgStore } from "@opencorp/ledgerd";
 import { verifyToken } from "@opencorp/mcp-client";
 import { registry, type ToolContext } from "./tools";
-import { PgRateLimiter } from "./ratelimit";
+import { PgRateLimiter } from "@opencorp/ratelimit";
 import { secretStoreFromEnv, infisicalEnv, InfisicalClient, InfisicalAdmin } from "./secrets";
 import { makeBrowser } from "./providers/browser";
 import { paymentsFor } from "./providers/payments";

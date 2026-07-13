@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { signToken, verifyToken } from "@opencorp/mcp-client";
-import { MemoryRateLimiter } from "../src/ratelimit";
+import { MemoryRateLimiter } from "@opencorp/ratelimit";
 
 describe("gateway tokens", () => {
   const scope = { companyId: "c1", taskId: "t1", exp: Math.floor(Date.now() / 1000) + 60 };

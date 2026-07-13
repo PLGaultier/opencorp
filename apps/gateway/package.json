@@ -17,6 +17,7 @@
     "@opencorp/ledgerd": "workspace:*",
     "@opencorp/llm": "workspace:*",
     "@opencorp/mcp-client": "workspace:*",
+    "@opencorp/ratelimit": "workspace:*",
     "@opencorp/stalwart": "workspace:*",
     "@opencorp/secrets": "workspace:*"
   },

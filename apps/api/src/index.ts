@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
@@ -23,6 +23,7 @@ import {
   startTaskRun,
   startWithdrawal,
 } from "@opencorp/workflows";
+import { PgRateLimiter, type ToolLimits } from "@opencorp/ratelimit";
 import { PLANS, PgBillingStore, billingProviderFromEnv, runGrantCycle, subscribe } from "./billing";
 import { buildPnlSeries } from "./pnl";
 import {
@@ -39,6 +40,22 @@ const databaseUrl =
 const store = new PgStore(databaseUrl);
 const ledger = new Ledger(store);
 const sql = postgres(databaseUrl, { max: 5 });
+
+// §7.2 spend guard: the owner endpoints below fan out to real LLM calls on the
+// platform's provider key but are NOT credit-charged (chat and heartbeat
+// planning are free by design; company creation runs an extraction call before
+// any wallet exists). Without a ceiling a scripted free-tier account could
+// hammer them and drain the platform's Anthropic/GLM budget. We throttle per
+// CONGLOMERATE (the account = the unit of abuse) so spinning up extra companies
+// can't multiply the budget. Backed by the same Postgres sliding-window limiter
+// the gateway uses for worker tool calls, with distinct `tool` keys so the rows
+// never collide. Limits are generous for a real human owner, lethal to a loop.
+const API_LLM_LIMITS: Record<string, ToolLimits> = {
+  ceo_chat: { hour: 60, day: 400 }, // 1 LLM call each
+  heartbeat: { hour: 20, day: 100 }, // ~5 LLM calls each (3 depts + CEO + lessons)
+  create_company: { hour: 10, day: 30 }, // extraction call + a new recurring heartbeat schedule
+};
+const apiLimiter = new PgRateLimiter(sql, API_LLM_LIMITS);
 
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3004";
 const GATEWAY_SECRET = process.env.GATEWAY_SECRET ?? "dev-gateway-secret";
@@ -85,6 +102,30 @@ const requireCompanyAccess: typeof requireAuth = async (c, next) => {
   }
   await next();
 };
+
+/** The conglomerate that owns a company, or null if it doesn't exist. */
+async function conglomerateOfCompany(companyId: string): Promise<string | null> {
+  const [r] = await sql<{ conglomerate_id: string }[]>`
+    SELECT conglomerate_id FROM companies WHERE id = ${companyId}`;
+  return r?.conglomerate_id ?? null;
+}
+
+/**
+ * §7.2 spend guard: throttle an owner endpoint that fans out to real LLM calls,
+ * keyed by the paying account (conglomerate). Returns a 429 Response (with the
+ * limiter's retry payload + Retry-After header) when over the limit, else null
+ * so the caller proceeds and the call is recorded against the window.
+ */
+async function llmSpendLimit(
+  c: Context,
+  conglomerateId: string,
+  tool: keyof typeof API_LLM_LIMITS,
+): Promise<Response | null> {
+  const limited = await apiLimiter.check(conglomerateId, tool);
+  if (!limited) return null;
+  c.header("Retry-After", String(limited.retry_after_s));
+  return c.json(limited, 429);
+}
 
 /**
  * Same as requireCompanyAccess but keyed on the :slug param — for the read-only
@@ -347,6 +388,10 @@ app.post("/companies", requireAuth, async (c) => {
   if (!conglomerateId || !mine.includes(conglomerateId)) {
     return c.json({ error: "forbidden", detail: "not a member of that conglomerate" }, 403);
   }
+  // §7.2 — creating a company runs a spec-extraction LLM call and stands up a
+  // recurring heartbeat; cap the rate per account so it can't be scripted.
+  const limited = await llmSpendLimit(c, conglomerateId, "create_company");
+  if (limited) return limited;
   const result = await startCreateCompany({ conglomerateId, prompt: body.data.prompt });
   return c.json(result, 201);
 });
@@ -463,9 +508,17 @@ app.patch("/tasks/:id", requireAuth, async (c) => {
 });
 
 // §5.2 — manual heartbeat / Run-now controls (dashboard actions, never LLM tools)
-app.post("/companies/:id/heartbeat", requireAuth, requireCompanyAccess, async (c) =>
-  c.json(await startHeartbeat(c.req.param("id"))),
-);
+// A heartbeat fans out to ~5 uncharged LLM calls (3 depts + CEO + lessons), so
+// throttle per account (§7.2) — the cron schedule drives the autonomous cadence;
+// this manual trigger must not be a free unlimited spend button.
+app.post("/companies/:id/heartbeat", requireAuth, requireCompanyAccess, async (c) => {
+  const companyId = c.req.param("id");
+  const congId = await conglomerateOfCompany(companyId);
+  if (!congId) return c.json({ error: "not_found" }, 404);
+  const limited = await llmSpendLimit(c, congId, "heartbeat");
+  if (limited) return limited;
+  return c.json(await startHeartbeat(companyId));
+});
 
 // §1 feature 5 / §5.2 — the autonomous clock: per-company Temporal cron
 // schedule. Pause/resume are owner controls; the CEO cannot reach them.
@@ -571,6 +624,10 @@ app.post("/companies/:id/chat", requireAuth, requireCompanyAccess, async (c) => 
   } catch {
     return c.json({ error: "not_found" }, 404);
   }
+  // §7.2 — chat is free (never charges credits) but each message is a real LLM
+  // call; throttle per account so it can't be scripted to drain the platform key.
+  const limited = await llmSpendLimit(c, company.conglomerateId, "ceo_chat");
+  if (limited) return limited;
   const ctx = await gatherCeoContext(sql, company);
   const { system, hash } = loadCeoPrompt(company);
 
