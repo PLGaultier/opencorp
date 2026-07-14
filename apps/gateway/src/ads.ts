@@ -55,9 +55,9 @@ export async function syncCompanyAdSpend(
   if (!co) throw new Error("company_not_found");
   const capCents = Number(co.ad_monthly_budget_cap_cents);
 
-  const [cg] = await sql<{ meta_ad_account_id: string | null }[]>`
-    SELECT meta_ad_account_id FROM conglomerates WHERE id = ${co.conglomerate_id}`;
-  const provider = await adsFor(co.conglomerate_id, secrets, cg?.meta_ad_account_id ?? null);
+  const [cg] = await sql<{ meta_ad_account_id: string | null; facebook_page_id: string | null }[]>`
+    SELECT meta_ad_account_id, facebook_page_id FROM conglomerates WHERE id = ${co.conglomerate_id}`;
+  const provider = await adsFor(co.conglomerate_id, secrets, cg?.meta_ad_account_id ?? null, cg?.facebook_page_id ?? null);
 
   const active = await sql<CampaignRow[]>`
     SELECT id, provider_ref, budget_cents, budget_type,
@@ -160,9 +160,9 @@ export async function optimizeCompanyAds(
   }
   const capCents = Number(co.ad_monthly_budget_cap_cents);
 
-  const [cg] = await sql<{ meta_ad_account_id: string | null }[]>`
-    SELECT meta_ad_account_id FROM conglomerates WHERE id = ${co.conglomerate_id}`;
-  const provider = await adsFor(co.conglomerate_id, secrets, cg?.meta_ad_account_id ?? null);
+  const [cg] = await sql<{ meta_ad_account_id: string | null; facebook_page_id: string | null }[]>`
+    SELECT meta_ad_account_id, facebook_page_id FROM conglomerates WHERE id = ${co.conglomerate_id}`;
+  const provider = await adsFor(co.conglomerate_id, secrets, cg?.meta_ad_account_id ?? null, cg?.facebook_page_id ?? null);
 
   // Per active campaign: this month's spend (ad_spend) + attributed revenue
   // (payments tagged with the campaign). One row per campaign.

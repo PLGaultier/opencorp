@@ -1,0 +1,1 @@
+ALTER TABLE "conglomerates" ADD COLUMN "facebook_page_id" text;

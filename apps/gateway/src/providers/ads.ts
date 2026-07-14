@@ -201,48 +201,186 @@ function seededFraction(seed: string): number {
   return h.readUInt32BE(0) / 0xffffffff;
 }
 
-// ── Meta (real ad platform) — Phase 2 scaffold ─────────────────────────────
-// The wire calls (campaigns/adsets/creatives/ads/insights over the Graph API)
-// land in Phase 2. The seam, gating, cap enforcement and ledger audit are all
-// here now; this throws clearly until the real client is wired so nothing
-// silently no-ops against a connected account.
-class MetaAds implements AdsProvider {
-  readonly kind = "meta";
-  constructor(
-    private token: string,
-    private adAccountId: string,
-  ) {}
+// ── Meta (real ad platform) ────────────────────────────────────────────────
 
-  private notYet(op: string): never {
-    throw new Error(`meta ads ${op} not implemented yet (Phase 2); account ${this.adAccountId}`);
+/** Marketing API version we pin against (revisit on Meta deprecation). */
+export const GRAPH_VERSION = "v21.0";
+/**
+ * Default audience geo when we create an ad set. v1 targeting is deliberately
+ * minimal — a broad country + Advantage+ audience (let Meta optimise). Owners
+ * can override the country via ADS_DEFAULT_COUNTRY; richer targeting is a later
+ * step (we don't expose it to agents yet).
+ */
+const DEFAULT_COUNTRY = process.env.ADS_DEFAULT_COUNTRY ?? "US";
+
+/**
+ * A Meta rejection. 4xx is terminal (a retry won't help — bad request / policy);
+ * a 5xx or a thrown network error is transient and safe for the caller to retry.
+ * The spend sync catches *any* throw per-campaign, so one bad campaign never
+ * blocks the rest of the sync (see syncCompanyAdSpend).
+ */
+export class MetaApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "MetaApiError";
   }
-  async createCampaign(): Promise<{ providerRef: string }> {
-    this.notYet("createCampaign");
-  }
-  async setBudget(): Promise<void> {
-    this.notYet("setBudget");
-  }
-  async launch(): Promise<void> {
-    this.notYet("launch");
-  }
-  async pause(): Promise<void> {
-    this.notYet("pause");
-  }
-  async insights(): Promise<DailySpend[]> {
-    this.notYet("insights");
+  get terminal(): boolean {
+    return this.status >= 400 && this.status < 500;
   }
 }
 
 /**
- * Select the ads provider for a conglomerate: Meta when a token + ad account are
- * configured, else the local mock. Token is a secret (vault); the ad account id
- * is a plain identifier passed in from the conglomerate row.
+ * A Meta campaign spans two objects we later act on: the campaign (launch /
+ * pause / insights) and its ad set (budget / launch). We pack both into the one
+ * existing `provider_ref text` column as `meta:<campaignId>:<adSetId>`, leaving
+ * the mock's `local:campaign:<id>` format untouched.
+ */
+function encodeRef(campaignId: string, adSetId: string): string {
+  return `meta:${campaignId}:${adSetId}`;
+}
+function decodeRef(providerRef: string): { campaignId: string; adSetId: string } {
+  const [kind, campaignId, adSetId] = providerRef.split(":");
+  if (kind !== "meta" || !campaignId || !adSetId) throw new Error(`not a meta provider_ref: ${providerRef}`);
+  return { campaignId, adSetId };
+}
+
+/** Objective → a pixel-free ad-set optimisation goal. Optimising for actual
+ *  purchases needs the Meta Pixel / Conversions API (a later step); until then
+ *  every objective drives clicks to the checkout link, where our ?c= param does
+ *  the sale attribution. */
+function optimizationGoal(objective: string): string {
+  return objective === "OUTCOME_AWARENESS" ? "REACH" : "LINK_CLICKS";
+}
+
+class MetaAds implements AdsProvider {
+  readonly kind = "meta";
+  constructor(
+    private token: string,
+    private adAccountId: string, // act_<digits>
+    private pageId: string,
+  ) {}
+
+  async createCampaign(spec: CampaignSpec): Promise<{ providerRef: string }> {
+    // 1) Campaign — PAUSED; special_ad_categories must be sent (empty = none).
+    const campaign = await this.graph(`${this.adAccountId}/campaigns`, {
+      name: spec.name,
+      objective: spec.objective,
+      status: "PAUSED",
+      special_ad_categories: "[]",
+    });
+    // 2) Ad set — carries the budget, schedule and (minimal) targeting.
+    const budgetKey = spec.budgetType === "lifetime" ? "lifetime_budget" : "daily_budget";
+    const adset = await this.graph(`${this.adAccountId}/adsets`, {
+      name: spec.name,
+      campaign_id: campaign.id,
+      [budgetKey]: String(spec.budgetCents),
+      billing_event: "IMPRESSIONS",
+      optimization_goal: optimizationGoal(spec.objective),
+      bid_strategy: "LOWEST_COST_WITHOUT_CAP",
+      targeting: JSON.stringify({
+        geo_locations: { countries: [DEFAULT_COUNTRY] },
+        targeting_automation: { advantage_audience: 1 },
+      }),
+      status: "PAUSED",
+    });
+    // 3) Ad creative — a link ad pointing at the checkout URL. v1 hotlinks the
+    //    creative image via link_data.picture; hardening to an uploaded
+    //    /adimages image_hash is a later step.
+    const linkData: Record<string, string> = {
+      message: spec.creative.body,
+      name: spec.creative.headline,
+      link: spec.creative.linkUrl,
+    };
+    if (spec.creative.imageUrl) linkData.picture = spec.creative.imageUrl;
+    const creative = await this.graph(`${this.adAccountId}/adcreatives`, {
+      name: spec.name,
+      object_story_spec: JSON.stringify({ page_id: this.pageId, link_data: linkData }),
+    });
+    // 4) Ad — binds creative to ad set, PAUSED.
+    await this.graph(`${this.adAccountId}/ads`, {
+      name: spec.name,
+      adset_id: adset.id,
+      creative: JSON.stringify({ creative_id: creative.id }),
+      status: "PAUSED",
+    });
+    return { providerRef: encodeRef(campaign.id, adset.id) };
+  }
+
+  async setBudget(providerRef: string, budgetCents: number, budgetType: "daily" | "lifetime"): Promise<void> {
+    const { adSetId } = decodeRef(providerRef);
+    const budgetKey = budgetType === "lifetime" ? "lifetime_budget" : "daily_budget";
+    await this.graph(adSetId, { [budgetKey]: String(budgetCents) });
+  }
+
+  async launch(providerRef: string): Promise<void> {
+    const { campaignId, adSetId } = decodeRef(providerRef);
+    // Both must be ACTIVE for delivery to start.
+    await this.graph(adSetId, { status: "ACTIVE" });
+    await this.graph(campaignId, { status: "ACTIVE" });
+  }
+
+  async pause(providerRef: string): Promise<void> {
+    const { campaignId } = decodeRef(providerRef);
+    // Pausing the campaign halts delivery of every ad set under it.
+    await this.graph(campaignId, { status: "PAUSED" });
+  }
+
+  async insights(q: InsightsQuery): Promise<DailySpend[]> {
+    const { campaignId } = decodeRef(q.providerRef);
+    const body = await this.graphGet(`${campaignId}/insights`, {
+      fields: "spend,impressions,clicks",
+      time_range: JSON.stringify({ since: q.sinceDay, until: q.throughDay }),
+      time_increment: "1",
+    });
+    const rows = (body.data as { date_start: string; spend?: string; impressions?: string; clicks?: string }[]) ?? [];
+    return rows.map((r) => ({
+      day: r.date_start,
+      spendCents: Math.round(parseFloat(r.spend ?? "0") * 100), // Meta reports spend in major units
+      impressions: Number(r.impressions ?? 0),
+      clicks: Number(r.clicks ?? 0),
+    }));
+  }
+
+  /** POST a form to the Graph API (create/update). Returns the JSON node. */
+  private async graph(path: string, form: Record<string, string>): Promise<{ id: string; [k: string]: unknown }> {
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${path}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams(form),
+    });
+    const body = (await res.json()) as { id: string; error?: { message: string } };
+    if (!res.ok) throw new MetaApiError(`meta ${path} failed: ${body.error?.message ?? res.status}`, res.status);
+    return body;
+  }
+
+  /** GET a Graph edge (insights). Returns the JSON node. */
+  private async graphGet(path: string, params: Record<string, string>): Promise<{ data?: unknown[]; [k: string]: unknown }> {
+    const qs = new URLSearchParams({ ...params, access_token: this.token });
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${path}?${qs}`);
+    const body = (await res.json()) as { data?: unknown[]; error?: { message: string } };
+    if (!res.ok) throw new MetaApiError(`meta ${path} failed: ${body.error?.message ?? res.status}`, res.status);
+    return body;
+  }
+}
+
+/**
+ * Select the ads provider for a conglomerate: Meta when a token + ad account +
+ * Facebook Page are all configured, else the local mock. Token is a secret
+ * (vault); the ad account id and page id are plain identifiers from the
+ * conglomerate row. All three are required — a Meta ad creative can't be built
+ * without a Page.
  */
 export async function adsFor(
   conglomerateId: string,
   secrets: SecretStore,
   metaAdAccountId: string | null,
+  facebookPageId: string | null,
 ): Promise<AdsProvider> {
   const token = await secrets.get(conglomerateId, "META_ACCESS_TOKEN");
-  return token && metaAdAccountId ? new MetaAds(token, metaAdAccountId) : new LocalAds();
+  return token && metaAdAccountId && facebookPageId
+    ? new MetaAds(token, metaAdAccountId, facebookPageId)
+    : new LocalAds();
 }

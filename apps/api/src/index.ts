@@ -923,8 +923,8 @@ app.get("/api/conglomerates/:id/credits", requireAuth, async (c) => {
   // Stripe Connect status: one connected account per conglomerate (§10). We
   // only need whether it's linked to label the dashboard button; live KYC
   // status comes back when the owner runs onboarding.
-  const [cg] = await sql<{ stripe_connect_account_id: string | null }[]>`
-    SELECT stripe_connect_account_id FROM conglomerates WHERE id = ${conglomerateId}`;
+  const [cg] = await sql<{ stripe_connect_account_id: string | null; meta_ad_account_id: string | null }[]>`
+    SELECT stripe_connect_account_id, meta_ad_account_id FROM conglomerates WHERE id = ${conglomerateId}`;
   // §10 pillar 1 — runway: net real spend over the last 7 days → cents/day → days left.
   const [burn] = await sql<{ total: string }[]>`
     SELECT COALESCE(-SUM(delta), 0) AS total FROM credit_entries
@@ -941,6 +941,7 @@ app.get("/api/conglomerates/:id/credits", requireAuth, async (c) => {
     runwayDays,
     breakdown: Object.fromEntries(breakdown.map((r) => [r.reason, Number(r.total)])),
     connectAccountId: cg?.stripe_connect_account_id ?? null,
+    metaAdAccountId: cg?.meta_ad_account_id ?? null,
     subscription: sub
       ? { plan: sub.plan, status: sub.status, currentPeriodStart: sub.current_period_start }
       : null,
@@ -974,6 +975,20 @@ app.post("/api/conglomerates/:id/connect/onboard", requireAuth, async (c) => {
     returnUrl: body.data.returnUrl,
     refreshUrl: body.data.refreshUrl ?? body.data.returnUrl,
   });
+  return c.json(out, status as 200);
+});
+
+// §14 — Meta Ads connect. Owner clicks "Connect Meta" and we hand back the
+// Facebook OAuth dialog URL to redirect to; Facebook then calls the gateway's
+// public callback directly. Same shape as Stripe Connect: the browser can't
+// sign the gateway HMAC, so the API authenticates the owner and forwards a
+// platform-signed request. The redirect URI is fixed gateway-side.
+app.post("/api/conglomerates/:id/connect/meta/start", requireAuth, async (c) => {
+  const conglomerateId = c.req.param("id");
+  if (!(await userIsMemberOfConglomerate(sql, c.get("userId"), conglomerateId))) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  const { status, body: out } = await gatewaySignedPost("/admin/connect/meta/start", { conglomerateId });
   return c.json(out, status as 200);
 });
 

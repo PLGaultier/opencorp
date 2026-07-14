@@ -12,6 +12,7 @@ import { paymentsFor } from "./providers/payments";
 import { recordPayment } from "./revenue";
 import { processWithdrawal } from "./payout";
 import { ensureConnectOnboarding } from "./connect";
+import { metaConnectStart, metaConnectCallback } from "./meta-connect";
 import { syncCompanyAdSpend, optimizeCompanyAds } from "./ads";
 import { verifyStripeSignature, parseCheckoutCompleted, fetchStripeFeeCents } from "./providers/stripe-webhook";
 import { creditWallet, activateSubscription, createBillingCheckout, localRef } from "./billing-checkout";
@@ -547,6 +548,54 @@ export function createGateway(opts?: {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: "onboard_failed", message }, message === "conglomerate_not_found" ? 404 : 502);
+    }
+  });
+
+  // Meta Ads connect (§14). Owner-initiated OAuth: `start` (signed like the
+  // other admin routes) hands back the Facebook dialog URL; Facebook then
+  // redirects the browser to the public `callback`, which exchanges the code,
+  // links the ad account + Page, and writes the token to the vault. The
+  // redirect URI must be byte-identical across both, so both resolve it from
+  // META_OAUTH_REDIRECT_URI (falling back to this route's own origin).
+  const metaRedirectUri = (c: { req: { url: string } }) =>
+    process.env.META_OAUTH_REDIRECT_URI ?? `${new URL(c.req.url).origin}/connect/meta/callback`;
+
+  app.post("/admin/connect/meta/start", async (c) => {
+    const raw = await c.req.text();
+    if (!signedBody(raw, c.req.header("x-opencorp-sig") ?? "")) return c.json({ error: "bad_signature" }, 401);
+    const parsed = z.object({ conglomerateId: z.string().uuid() }).safeParse(JSON.parse(raw || "{}"));
+    if (!parsed.success) return c.json({ error: "invalid_input", detail: parsed.error.message }, 400);
+    try {
+      return c.json(await metaConnectStart(secrets, { conglomerateId: parsed.data.conglomerateId, redirectUri: metaRedirectUri(c) }));
+    } catch (err) {
+      return c.json({ error: "meta_start_failed", message: err instanceof Error ? err.message : String(err) }, 502);
+    }
+  });
+
+  app.get("/connect/meta/callback", async (c) => {
+    // Where we bounce the owner's browser back to after linking (the dashboard).
+    const returnBase = process.env.META_CONNECT_RETURN_URL ?? "/";
+    const done = (params: Record<string, string>) =>
+      c.redirect(`${returnBase}${returnBase.includes("?") ? "&" : "?"}${new URLSearchParams(params)}`);
+    const code = c.req.query("code");
+    const state = c.req.query("state");
+    if (!code || !state) return done({ meta: "error", reason: c.req.query("error_description") ?? "missing_code" });
+
+    // Write the long-lived token to the conglomerate's vault folder — same
+    // scope adsFor reads it from. Null when the vault backend is off (dev).
+    const cfg = infisicalEnv();
+    const saveToken = cfg
+      ? async (conglomerateId: string, token: string) => {
+          const admin = new InfisicalAdmin(new InfisicalClient(cfg));
+          await admin.ensureCompanyFolder(conglomerateId);
+          await admin.setCompanySecret(conglomerateId, "META_ACCESS_TOKEN", token);
+        }
+      : null;
+    try {
+      const r = await metaConnectCallback(sql, secrets, { code, state, redirectUri: metaRedirectUri(c) }, saveToken);
+      return done({ meta: r.tokenStored ? "connected" : "linked", account: r.adAccountId, page: r.pageId });
+    } catch (err) {
+      return done({ meta: "error", reason: err instanceof Error ? err.message : String(err) });
     }
   });
 
