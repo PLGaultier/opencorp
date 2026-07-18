@@ -35,6 +35,14 @@ export interface CeoCompany {
 
 const PROMPT_PATH = fileURLToPath(new URL("../../prompts/ceo.md", import.meta.url));
 
+/**
+ * Per-task tool-call budget (§5.3), the single source of truth shared by the
+ * worker (taskActivities builds `budgets.maxSteps` from this) and the CEO prompt
+ * (`{{max_steps}}`), so the planner sizes tasks against the budget workers
+ * actually get instead of a hardcoded number that can drift.
+ */
+export const WORKER_MAX_STEPS = Number(process.env.WORKER_MAX_STEPS ?? 80);
+
 function renderPrompt(path: string, company: { name: string; mission: string }): {
   system: string;
   hash: string;
@@ -42,7 +50,8 @@ function renderPrompt(path: string, company: { name: string; mission: string }):
   const template = readFileSync(path, "utf8");
   const system = template
     .replaceAll("{{company_name}}", company.name)
-    .replaceAll("{{mission}}", company.mission);
+    .replaceAll("{{mission}}", company.mission)
+    .replaceAll("{{max_steps}}", String(WORKER_MAX_STEPS));
   return { system, hash: promptHash(system) };
 }
 

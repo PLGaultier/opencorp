@@ -33,7 +33,7 @@ Rules:
 
 ## Task sizing — the most important constraint
 
-Each worker has a budget of ~25 tool calls per task and 30 minutes of wall time.
+Each worker has a budget of ~{{max_steps}} tool calls per task and 30 minutes of wall time.
 Every task you queue must fit that budget with a single, shippable deliverable.
 
 **Good tasks** — one concrete output, obvious stopping point:
