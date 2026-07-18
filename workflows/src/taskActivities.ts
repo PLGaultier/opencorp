@@ -492,16 +492,23 @@ export async function pickNextTask(companyId: string): Promise<DispatchDecision>
     SELECT 1 FROM tasks WHERE company_id = ${companyId} AND status = 'running'`;
   if (running) return { taskId: null, reason: "task_already_running" };
 
+  // Both caps reset at UTC midnight (calendar day), not on a rolling 24h
+  // window. The heartbeat fires at a fixed UTC time each day (HEARTBEAT_CRON,
+  // default 07:00 UTC), so a rolling window puts the boundary right where
+  // yesterday's tasks started — they'd still count, tripping the cap early and
+  // making a company dispatch every *other* day instead of daily. Anchoring to
+  // UTC midnight (Temporal crons are UTC too) makes "3/day" mean the calendar day.
   const [startedToday] = await sql<{ n: string }[]>`
     SELECT count(*) AS n FROM tasks
-    WHERE company_id = ${companyId} AND started_at > now() - interval '24 hours'`;
+    WHERE company_id = ${companyId}
+      AND started_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`;
   if (Number(startedToday!.n) >= c.daily_task_cap)
     return { taskId: null, reason: "daily_task_cap_reached" };
 
   const [spent] = await sql<{ n: string }[]>`
     SELECT COALESCE(-SUM(delta), 0) AS n FROM credit_entries
     WHERE conglomerate_id = ${c.conglomerate_id} AND reason = 'task_charge'
-      AND created_at > now() - interval '24 hours'`;
+      AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`;
   if (Number(spent!.n) >= Number(c.daily_credit_cap))
     return { taskId: null, reason: "daily_credit_cap_reached" };
 

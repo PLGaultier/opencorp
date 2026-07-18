@@ -132,10 +132,11 @@ export const conglomerates = pgTable("conglomerates", {
   id: uuid("id").primaryKey().defaultRandom(),
   ownerUserId: text("owner_user_id").notNull(),
   name: text("name").notNull(),
-  // 24h rolling cap (cents) on task spend (§11.7). Must comfortably exceed a
-  // single task's up-front hold (DEFAULT_TASK_ESTIMATE_CENTS = 80) times the
-  // company daily_task_cap, or the first task of the day trips the cap and the
-  // rest stall. 500 = €5/day ≈ the €5 onboarding grant, room for the default
+  // Per-calendar-day cap (cents) on task spend (§11.7), reset at UTC midnight
+  // to match the daily heartbeat cron. Must comfortably exceed a single task's
+  // up-front hold (DEFAULT_TASK_ESTIMATE_CENTS = 80) times the company
+  // daily_task_cap, or the first task of the day trips the cap and the rest
+  // stall. 500 = €5/day ≈ the €5 onboarding grant, room for the default
   // 3 tasks/day; owners can tune it per conglomerate.
   dailyCreditCap: numeric("daily_credit_cap").notNull().default("500"),
   // Stripe Connect (§10): one connected account per conglomerate (per owner) —
