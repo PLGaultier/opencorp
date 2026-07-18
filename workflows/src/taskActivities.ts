@@ -28,6 +28,7 @@ import {
   loadDepartmentPrompt,
   promoteCompanyLessons,
   reinforceLessons,
+  WORKER_MAX_STEPS,
 } from "./ceo";
 import { reinvestRevenue } from "./reinvest";
 
@@ -220,7 +221,7 @@ export async function runWorker(
   // §5.3 hard budgets; WORKER_MAX_STEPS lets cost-sensitive runs (real-LLM
   // smoke tests) cap the loop below the default without touching the contract
   const budgets = {
-    maxSteps: Number(process.env.WORKER_MAX_STEPS ?? 80),
+    maxSteps: WORKER_MAX_STEPS,
     maxWallClockMs: 30 * 60_000,
   };
   // §9.2: the Langfuse trace id is the task id — recorded up front so the
