@@ -8,11 +8,13 @@ import { syncInboxFromEnv } from "@opencorp/stalwart";
 import {
   DEPARTMENT_KEYS,
   fallbackDepartment,
+  fallbackPlan,
   llmConfigFromEnv,
   planDepartment,
   planHeartbeat,
   tierShiftForLevel,
   tracerFromEnv,
+  type CeoPlan,
   type DepartmentReport,
 } from "@opencorp/llm";
 import {
@@ -401,13 +403,25 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
   );
 
   const traceId = `ceo-${companyId}-${day}`;
-  const plan = await planHeartbeat(
-    cfg,
-    system,
-    ctx,
-    tracer ? { tracer, traceId, name: "heartbeat-plan" } : undefined,
-    reports,
-  );
+  // Same contract as the department planners above: a model failure degrades to
+  // the deterministic plan instead of killing the heartbeat. Without this an
+  // unparseable reply lost the entire day — prod queued no work at all on
+  // 2026-07-19, 07-21 (partial) and 07-22. The reason lands on the ledger event
+  // so a persistently failing model can't hide behind a plausible-looking plan.
+  let planDegraded: string | null = null;
+  let plan: CeoPlan;
+  try {
+    plan = await planHeartbeat(
+      cfg,
+      system,
+      ctx,
+      tracer ? { tracer, traceId, name: "heartbeat-plan" } : undefined,
+      reports,
+    );
+  } catch (err) {
+    planDegraded = err instanceof Error ? err.message : String(err);
+    plan = fallbackPlan(ctx, reports);
+  }
   await tracer?.flush();
 
   // Don't queue new tasks the wallet can't fund a single task's estimate of —
@@ -427,6 +441,9 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
       createdTasks: applied.createdTasks,
       missionUpdated: applied.missionUpdated,
       promptHash: hash,
+      // Present only when the CEO model failed and the deterministic planner
+      // stood in — surfaced so a silently-degrading model is auditable.
+      ...(planDegraded ? { degradedToFallback: planDegraded } : {}),
       departments: Object.fromEntries(
         reports.map((r) => [r.department, { headline: r.headline, proposed: r.proposed_tasks.length }]),
       ),
@@ -517,11 +534,18 @@ export async function pickNextTask(companyId: string): Promise<DispatchDecision>
   if ((await creditBalance(c.conglomerate_id)) < DEFAULT_TASK_ESTIMATE_CENTS)
     return { taskId: null, reason: "insufficient_funds" };
 
+  // Effective priority ages up by 1 per day waited (capped at +10), so nothing
+  // can starve regardless of what priority the CEO assigned. Straight
+  // `priority DESC` let a steady drip of higher-priority work bury older tasks
+  // indefinitely: in prod a p0 task queued 2026-07-13 first ran 2026-07-22, and
+  // the CEO meanwhile re-planned it into 5 near-duplicate tasks.
   const [next] = await sql<{ id: string }[]>`
     SELECT id FROM tasks
     WHERE company_id = ${companyId} AND status = 'queued'
       AND (scheduled_for IS NULL OR scheduled_for <= now())
-    ORDER BY priority DESC, created_at LIMIT 1`;
+    ORDER BY priority + LEAST(FLOOR(EXTRACT(EPOCH FROM now() - created_at) / 86400), 10) DESC,
+             created_at
+    LIMIT 1`;
   return next ? { taskId: next.id, reason: "ok" } : { taskId: null, reason: "queue_empty" };
 }
 

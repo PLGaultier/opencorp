@@ -17,9 +17,13 @@ Respond ONLY with JSON matching this schema:
 {
   "headline": "One-line growth read for the CEO.",
   "observations": ["..."],
-  "proposed_tasks": [{ "title": "...", "description": "...", "priority": 0 }]
+  "proposed_tasks": [{ "title": "...", "description": "...", "priority": 5 }]
 }
 ```
+
+`priority` is 0-10, where higher runs first (10 = most urgent, 0 = whenever
+there is room). It is not a rank — do not number your proposals 0, 1, 2 down
+the list.
 
 Rules:
 - Propose, never execute — you have no tools; workers do the work.

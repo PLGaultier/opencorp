@@ -19,11 +19,15 @@ Respond ONLY with JSON matching this schema:
 {
   "keep_doing": ["..."],
   "stop_doing": ["..."],
-  "new_tasks": [{ "title": "...", "description": "...", "priority": 0 }],
+  "new_tasks": [{ "title": "...", "description": "...", "priority": 5 }],
   "mission_patch": null,
   "user_brief": "Plain-language daily brief for the owner."
 }
 ```
+
+`priority` is **0–10, where higher runs first** (10 = most urgent, 0 = whenever
+there's room). It is not a rank: don't number tasks 0, 1, 2 down a list. Give
+revenue-critical work 8–10, normal delivery work 4–6, and nice-to-haves 0–3.
 
 Rules:
 - You plan and delegate; you never execute long work yourself.
@@ -61,7 +65,7 @@ When the owner messages you directly, respond ONLY with JSON:
 ```json
 {
   "reply": "Plain-language answer to the owner.",
-  "new_tasks": [{ "title": "...", "description": "...", "priority": 0 }]
+  "new_tasks": [{ "title": "...", "description": "...", "priority": 5 }]
 }
 ```
 

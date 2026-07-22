@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { chat, type LlmConfig, type ChatOptions } from "./client";
+import { withLlmRetry } from "./retry";
 import type { DepartmentReport } from "./departments";
 import { renderLessonsBlock, type LessonTip } from "./lessons";
 import { routeTier, deriveHeartbeatSignals, budgetFromContext, type RouteDecision } from "./router";
@@ -35,7 +36,10 @@ function routedTrace(
 export const CeoTask = z.object({
   title: z.string().min(1).max(200),
   description: z.string().max(4000).default(""),
-  priority: z.number().int().min(0).max(10).default(0),
+  // 0-10, higher dispatches first (see pickNextTask). Defaults to the middle,
+  // not 0: an omitted priority used to mean "runs last, forever" — in prod every
+  // one of the 16 permanently-stuck queued tasks sat at priority 0.
+  priority: z.number().int().min(0).max(10).default(5),
 });
 
 export const CeoPlan = z.object({
@@ -129,26 +133,37 @@ export async function planHeartbeat(
   // OPE-7: route the strategic call by how messy/valuable this heartbeat is.
   const signals = deriveHeartbeatSignals(ctx);
   const route = routeTier(signals);
-  let raw = await chat(cfg, {
-    tier: route.tier,
-    system: systemPrompt,
-    user,
-    jsonOnly: true,
-    trace: routedTrace(trace, route, signals),
-  });
+  // withLlmRetry: a transient blip (empty completion, undici timeout, 429/5xx)
+  // must not cost the company its whole day. The worker loop has retried since
+  // 2026-07-18; planning did not, so prod produced 0 plans on 2026-07-19 and
+  // 2026-07-22 and queued no work at all on those days.
+  let raw = await withLlmRetry(() =>
+    chat(cfg, {
+      tier: route.tier,
+      system: systemPrompt,
+      user,
+      jsonOnly: true,
+      trace: routedTrace(trace, route, signals),
+    }),
+  );
   for (let attempt = 0; ; attempt++) {
     const parsed = CeoPlan.safeParse(tryJson(raw));
     if (parsed.success) return parsed.data;
+    // Throws by design, mirroring planDepartment: runCeoPlanning substitutes
+    // fallbackPlan and records the reason on the ceo_plan ledger event, so a
+    // model that has started failing every day stays visible.
     if (attempt >= 1) throw new Error(`ceo plan failed validation: ${parsed.error.message}`);
     // schema-repair retry (§5.4) — never below the tier that just failed (OPE-7).
     const repair = routeTier({ taskKind: "schema_repair_retry", baseTier: route.tier });
-    raw = await chat(cfg, {
-      tier: repair.tier,
-      system: systemPrompt,
-      user: `${user}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
-      jsonOnly: true,
-      trace: routedTrace(trace, repair, { taskKind: "schema_repair_retry" }),
-    });
+    raw = await withLlmRetry(() =>
+      chat(cfg, {
+        tier: repair.tier,
+        system: systemPrompt,
+        user: `${user}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
+        jsonOnly: true,
+        trace: routedTrace(trace, repair, { taskKind: "schema_repair_retry" }),
+      }),
+    );
   }
 }
 
@@ -172,26 +187,32 @@ export async function ceoChat(
   // (else deterministic), and cap the routed tier by the wallet's runway.
   const signals = await classifyChatSignals(cfg, message);
   const route = routeTier({ ...signals, budget: budgetFromContext(ctx) });
-  let raw = await chat(cfg, {
-    tier: route.tier,
-    system: systemPrompt,
-    user,
-    jsonOnly: true,
-    trace: routedTrace(trace, route, signals),
-  });
+  let raw = await withLlmRetry(() =>
+    chat(cfg, {
+      tier: route.tier,
+      system: systemPrompt,
+      user,
+      jsonOnly: true,
+      trace: routedTrace(trace, route, signals),
+    }),
+  );
   for (let attempt = 0; ; attempt++) {
     const parsed = CeoChatReply.safeParse(tryJson(raw));
     if (parsed.success) return parsed.data;
+    // Unlike planHeartbeat this stays a throw: chat is interactive, so the owner
+    // sees the failure and can just ask again.
     if (attempt >= 1) throw new Error(`ceo chat failed validation: ${parsed.error.message}`);
     // schema-repair retry — never below the tier that just failed (OPE-7).
     const repair = routeTier({ taskKind: "schema_repair_retry", baseTier: route.tier });
-    raw = await chat(cfg, {
-      tier: repair.tier,
-      system: systemPrompt,
-      user: `${user}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
-      jsonOnly: true,
-      trace: routedTrace(trace, repair, { taskKind: "schema_repair_retry" }),
-    });
+    raw = await withLlmRetry(() =>
+      chat(cfg, {
+        tier: repair.tier,
+        system: systemPrompt,
+        user: `${user}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
+        jsonOnly: true,
+        trace: routedTrace(trace, repair, { taskKind: "schema_repair_retry" }),
+      }),
+    );
   }
 }
 

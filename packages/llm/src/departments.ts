@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { chat, type LlmConfig, type ChatOptions } from "./client";
+import { withLlmRetry } from "./retry";
 import { CeoTask, type CeoContext } from "./ceo";
 import { renderLessonsBlock, DEPARTMENT_CATEGORIES } from "./lessons";
 import { routeTier, deriveDepartmentSignals, type RouteDecision } from "./router";
@@ -88,26 +89,34 @@ export async function planDepartment(
   // OPE-7: sub-planners run cheap (mini) unless the slice is hard/high-stakes.
   const signals = { taskKind: "department_synthesis" as const, ...deriveDepartmentSignals(ctx) };
   const route = routeTier(signals);
-  let raw = await chat(cfg, {
-    tier: route.tier,
-    system: systemPrompt,
-    user,
-    jsonOnly: true,
-    trace: routedTrace(trace, route, { ...signals, department: dept }),
-  });
+  let raw = await withLlmRetry(() =>
+    chat(cfg, {
+      tier: route.tier,
+      system: systemPrompt,
+      user,
+      jsonOnly: true,
+      trace: routedTrace(trace, route, { ...signals, department: dept }),
+    }),
+  );
   for (let attempt = 0; ; attempt++) {
     const parsed = DepartmentProposal.safeParse(tryJson(raw));
     if (parsed.success) return { department: dept, ...parsed.data };
+    // Throws on purpose: runCeoPlanning already catches this, substitutes
+    // fallbackDepartment, and records `degradedToFallback` (with the reason) on
+    // the department_plan ledger event. Swallowing it here would silently lose
+    // that signal — a failing department would look like a healthy one.
     if (attempt >= 1) throw new Error(`${dept} proposal failed validation: ${parsed.error.message}`);
     // schema-repair retry (§5.4) — never below the tier that just failed (OPE-7).
     const repair = routeTier({ taskKind: "schema_repair_retry", baseTier: route.tier });
-    raw = await chat(cfg, {
-      tier: repair.tier,
-      system: systemPrompt,
-      user: `${user}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
-      jsonOnly: true,
-      trace: routedTrace(trace, repair, { taskKind: "schema_repair_retry", department: dept }),
-    });
+    raw = await withLlmRetry(() =>
+      chat(cfg, {
+        tier: repair.tier,
+        system: systemPrompt,
+        user: `${user}\n\nYour previous output failed validation:\n${parsed.error.message}\nReturn corrected JSON only.`,
+        jsonOnly: true,
+        trace: routedTrace(trace, repair, { taskKind: "schema_repair_retry", department: dept }),
+      }),
+    );
   }
 }
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { chatRaw, costMicroCents, llmConfigFromEnv, tracerFromEnv } from "@opencorp/llm";
+import { chatRaw, costMicroCents, llmConfigFromEnv, tracerFromEnv, withLlmRetry } from "@opencorp/llm";
 import { callTool } from "@opencorp/mcp-client";
 import { scriptedPolicy } from "./scripted";
 import { CodeRunner, type CodeToolName } from "./code";
@@ -25,45 +25,10 @@ export interface WorkerTaskResult {
   costMicroCents?: number;
 }
 
-// A transient LLM failure is a per-call blip, not a reason to fail the whole
-// task: z.ai/GLM occasionally returns an empty completion (even with reasoning
-// disabled), and the fetch to LiteLLM can flake (undici headers timeout, reset
-// socket, 429/5xx). Without a retry, one blip kills the entire heartbeat task —
-// seen in prod as `llm returned empty completion` and `HeadersTimeoutError`.
-// Anything else (400/401 bad request, auth) is not transient and rethrows at once.
-export const TRANSIENT_LLM =
-  /empty completion|fetch failed|headers timeout|UND_ERR|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up|\b(?:429|502|503|504)\b/i;
-
-/** True for errors worth retrying (empty completion, network flake, 429/5xx). */
-export function isTransientLlmError(err: unknown): boolean {
-  const cause = (err as { cause?: { code?: string } })?.cause?.code ?? "";
-  const msg = err instanceof Error ? `${err.message} ${cause}` : String(err);
-  return TRANSIENT_LLM.test(msg);
-}
-
-/**
- * Retry a single LLM call over transient failures. z.ai/GLM occasionally returns
- * an empty completion (even with reasoning disabled), and the fetch to LiteLLM
- * can flake (undici headers timeout, reset socket, 429/5xx). Without this, one
- * blip fails the whole heartbeat task — seen in prod as `llm returned empty
- * completion` and `HeadersTimeoutError`. Non-transient errors (400/401) rethrow
- * immediately. `sleep` is injectable so tests don't wait on real backoff.
- */
-export async function withLlmRetry<T>(
-  call: () => Promise<T>,
-  attempts = Number(process.env.WORKER_LLM_RETRIES ?? 3),
-  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
-): Promise<T> {
-  for (let i = 0; ; i++) {
-    try {
-      return await call();
-    } catch (err) {
-      if (i >= attempts - 1 || !isTransientLlmError(err)) throw err;
-      // 300ms → 600ms → 1200ms … with jitter, so a brief upstream blip clears.
-      await sleep(300 * 2 ** i + Math.random() * 150);
-    }
-  }
-}
+// Transient-LLM retry now lives in @opencorp/llm so every LLM entry point can
+// share it — the worker loop had it, CEO planning didn't, and prod lost whole
+// days to a single empty completion. Re-exported here for existing callers.
+export { TRANSIENT_LLM, isTransientLlmError, withLlmRetry } from "@opencorp/llm";
 
 const chatRawWithRetry = (
   cfg: Parameters<typeof chatRaw>[0],
@@ -145,6 +110,17 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
   // and then hard-stop if the worker is spinning on an identical call.
   const recentSigs: string[] = [];
 
+  // B5 — rate-limit guard. B4 only catches *identical* args, so a worker that
+  // regenerates slightly different content each try walks straight past it: in
+  // prod one task fired 28 deploy_site calls with re-rendered HTML and died on
+  // wall_clock_budget_exceeded. Worse, the limiter records a hit *before* it
+  // checks, so every blocked retry pushes the window further out — hammering
+  // lengthens the lockout. Once a tool reports rate_limited we stop sending to
+  // it locally and tell the model plainly, rather than letting it spend the
+  // task discovering the same wall.
+  // Keyed by tool name, matching how the limiter itself scopes its windows.
+  const rateLimited = new Set<string>();
+
   try {
     for (let n = 1; n <= maxSteps; n++) {
       if (Date.now() > deadline) throw new Error("wall_clock_budget_exceeded");
@@ -189,7 +165,26 @@ export async function runWorkerTask(input: WorkerTaskInput): Promise<WorkerTaskR
         };
       }
       input.onStep?.({ n, thought, tool: `${action.server}.${action.tool}` });
+      // Already known to be rate limited: refuse locally. Sending it would record
+      // another hit and extend the very window the worker is waiting on.
+      if (rateLimited.has(action.tool)) {
+        transcript.push(
+          `Step ${n}: ${action.server}.${action.tool} was already refused as rate limited in this task, so it was not sent again. ` +
+            `Retrying only extends the limit. Use a different tool, or finish (action.final) with what you have.`,
+        );
+        continue;
+      }
       const result = await dispatchTool(input, code, action.server, action.tool, action.args);
+      if (result && typeof result === "object" && (result as { error?: string }).error === "rate_limited") {
+        const { message = "" } = result as { message?: string };
+        rateLimited.add(action.tool);
+        transcript.push(
+          `Step ${n}: ${action.server}.${action.tool} was REFUSED — ${message} ` +
+            `Do NOT call it again in this task: each attempt is counted and pushes the reset further out. ` +
+            `Achieve the goal another way, or finish (action.final) summarising what you completed and what remains for the next run.`,
+        );
+        continue;
+      }
       // §10 — a server-side-metered tool (e.g. web.search) returns its own usage;
       // fold it into the task's real API cost, then hide it from the model.
       if (result && typeof result === "object" && "_meter" in result) {
