@@ -187,10 +187,44 @@ export async function expireStaleApprovals(
   return stale.length;
 }
 
+/** Content words of a title, lowercased — filler dropped so it doesn't pad overlap. */
+const STOPWORDS = new Set([
+  "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "at", "with",
+  "create", "add", "make", "set", "up", "new",
+]);
+
+function titleTokens(title: string): Set<string> {
+  return new Set(
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 1 && !STOPWORDS.has(w)),
+  );
+}
+
 /**
- * §5.2 step 3 — create the plan's tasks (deduped by title against open tasks,
- * so Temporal retries don't double-queue) and apply the mission patch.
- * Returns what actually changed, for the ledger event.
+ * True when two task titles describe the same work. Exact-title matching let the
+ * CEO re-queue the same job under a reworded title every heartbeat — prod ended
+ * up with 5 near-duplicate Stripe-product tasks ("Create Stripe Basic product
+ * €29" vs "Create Stripe Basic Plan Product (€29/mo)"). Dice coefficient over
+ * content words at 0.6 catches rewordings while keeping genuinely different work
+ * apart ("Write the FAQ page" vs "Link FAQ to Navigation" scores well below).
+ */
+export function isNearDuplicateTitle(a: string, b: string, threshold = 0.6): boolean {
+  if (!a.trim() || !b.trim()) return false;
+  if (a.trim().toLowerCase() === b.trim().toLowerCase()) return true;
+  const [ta, tb] = [titleTokens(a), titleTokens(b)];
+  if (ta.size === 0 || tb.size === 0) return false;
+  let shared = 0;
+  for (const w of ta) if (tb.has(w)) shared++;
+  return (2 * shared) / (ta.size + tb.size) >= threshold;
+}
+
+/**
+ * §5.2 step 3 — create the plan's tasks (deduped against open tasks, so Temporal
+ * retries don't double-queue and a reworded re-plan doesn't pile up duplicates)
+ * and apply the mission patch. Returns what actually changed, for the ledger.
  */
 export async function applyCeoPlan(
   sql: Sql,
@@ -200,15 +234,20 @@ export async function applyCeoPlan(
   meta: { promptHash: string; source: "heartbeat" | "chat" },
 ): Promise<{ createdTasks: string[]; missionUpdated: boolean }> {
   const createdTasks: string[] = [];
+  // Dedup against everything still open, including what this plan just queued,
+  // so one plan can't propose the same work twice.
+  const open = (
+    await sql<{ title: string }[]>`
+      SELECT title FROM tasks WHERE company_id = ${company.id}
+        AND status IN ('pending', 'queued', 'running')`
+  ).map((r) => r.title);
   for (const t of plan.new_tasks) {
-    const [exists] = await sql`
-      SELECT 1 FROM tasks WHERE company_id = ${company.id} AND title = ${t.title}
-        AND status IN ('pending', 'queued', 'running')`;
-    if (exists) continue;
+    if (open.some((title) => isNearDuplicateTitle(title, t.title))) continue;
     await sql`
       INSERT INTO tasks (company_id, created_by_agent_id, title, description, status, priority)
       VALUES (${company.id}, ${company.ceoAgentId}, ${t.title}, ${t.description}, 'queued', ${t.priority})`;
     createdTasks.push(t.title);
+    open.push(t.title);
   }
 
   let missionUpdated = false;

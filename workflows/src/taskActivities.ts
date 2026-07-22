@@ -427,6 +427,9 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
       createdTasks: applied.createdTasks,
       missionUpdated: applied.missionUpdated,
       promptHash: hash,
+      // Present only when the CEO model failed and the deterministic planner
+      // stood in — surfaced so a silently-degrading model is auditable.
+      ...(plan.degraded ? { degraded: true } : {}),
       departments: Object.fromEntries(
         reports.map((r) => [r.department, { headline: r.headline, proposed: r.proposed_tasks.length }]),
       ),
@@ -517,11 +520,18 @@ export async function pickNextTask(companyId: string): Promise<DispatchDecision>
   if ((await creditBalance(c.conglomerate_id)) < DEFAULT_TASK_ESTIMATE_CENTS)
     return { taskId: null, reason: "insufficient_funds" };
 
+  // Effective priority ages up by 1 per day waited (capped at +10), so nothing
+  // can starve regardless of what priority the CEO assigned. Straight
+  // `priority DESC` let a steady drip of higher-priority work bury older tasks
+  // indefinitely: in prod a p0 task queued 2026-07-13 first ran 2026-07-22, and
+  // the CEO meanwhile re-planned it into 5 near-duplicate tasks.
   const [next] = await sql<{ id: string }[]>`
     SELECT id FROM tasks
     WHERE company_id = ${companyId} AND status = 'queued'
       AND (scheduled_for IS NULL OR scheduled_for <= now())
-    ORDER BY priority DESC, created_at LIMIT 1`;
+    ORDER BY priority + LEAST(FLOOR(EXTRACT(EPOCH FROM now() - created_at) / 86400), 10) DESC,
+             created_at
+    LIMIT 1`;
   return next ? { taskId: next.id, reason: "ok" } : { taskId: null, reason: "queue_empty" };
 }
 

@@ -1,4 +1,5 @@
 export * from "./client";
+export * from "./retry";
 export * from "./levels";
 export * from "./pricing";
 export * from "./companySpec";
