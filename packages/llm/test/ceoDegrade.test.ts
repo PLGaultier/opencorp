@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { planHeartbeat, CeoPlan, type CeoContext } from "../src/ceo";
+import { planHeartbeat, fallbackPlan, CeoPlan, type CeoContext } from "../src/ceo";
 import type { LlmConfig } from "../src/client";
 
 /**
- * A failing CEO model must degrade to the deterministic plan, never throw.
+ * Transient LLM failures must not reach the caller at all — prod (2026-07-19 →
+ * 2026-07-22) lost whole days because a single empty completion escaped
+ * planHeartbeat and killed the heartbeat workflow, queueing no work.
  *
- * Prod (2026-07-19 → 2026-07-22) lost whole days this way: a transient empty
- * completion or an unparseable reply escaped planHeartbeat, the heartbeat
- * workflow died, and the company queued no work at all.
+ * A *persistent* failure still throws on purpose: runCeoPlanning catches it,
+ * substitutes fallbackPlan, and records the reason on the ceo_plan ledger event
+ * (same contract as planDepartment). Swallowing it here would hide a model that
+ * has started failing every day behind a plausible-looking plan.
  */
 
 /** A LiteLLM stub whose reply is chosen per request, so retries can differ. */
@@ -45,29 +48,29 @@ const validPlan = JSON.stringify({
   user_brief: "Recovered after a blip.",
 });
 
-describe("planHeartbeat degradation", () => {
-  test("unparseable replies degrade to a valid fallback plan instead of throwing", async () => {
+describe("planHeartbeat resilience", () => {
+  test("a persistently unparseable reply throws after one schema repair", async () => {
     const { server, cfg, calls } = stubServer(() => ({ body: completion("not json at all") }));
     try {
-      const plan = await planHeartbeat(cfg, "system", ctx);
-      expect(CeoPlan.safeParse(plan).success).toBe(true);
-      expect(plan.degraded).toBe(true);
-      // one initial call + one schema-repair retry, then degrade rather than throw
+      await expect(planHeartbeat(cfg, "system", ctx)).rejects.toThrow("ceo plan failed validation");
+      // one initial call + exactly one schema-repair retry, then give up
       expect(calls()).toBe(2);
     } finally {
       server.stop(true);
     }
   });
 
-  test("a null reply (the 2026-07-21 prod failure) degrades rather than throwing", async () => {
+  test("a null reply (the 2026-07-21 prod failure) throws rather than hanging or looping", async () => {
     const { server, cfg } = stubServer(() => ({ body: completion("null") }));
     try {
-      const plan = await planHeartbeat(cfg, "system", ctx);
-      expect(plan.degraded).toBe(true);
-      expect(plan.user_brief.length).toBeGreaterThan(0);
+      await expect(planHeartbeat(cfg, "system", ctx)).rejects.toThrow("ceo plan failed validation");
     } finally {
       server.stop(true);
     }
+  });
+
+  test("the deterministic fallback the caller substitutes is a valid plan", () => {
+    expect(CeoPlan.safeParse(fallbackPlan(ctx)).success).toBe(true);
   });
 
   test("a transient empty completion is retried, not fatal", async () => {
@@ -77,7 +80,6 @@ describe("planHeartbeat degradation", () => {
     );
     try {
       const plan = await planHeartbeat(cfg, "system", ctx);
-      expect(plan.degraded).toBeUndefined();
       expect(plan.new_tasks[0]!.title).toBe("Ship pricing page");
       expect(calls()).toBe(2);
     } finally {
@@ -91,7 +93,6 @@ describe("planHeartbeat degradation", () => {
     );
     try {
       const plan = await planHeartbeat(cfg, "system", ctx);
-      expect(plan.degraded).toBeUndefined();
       expect(plan.new_tasks[0]!.title).toBe("Ship pricing page");
     } finally {
       server.stop(true);

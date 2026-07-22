@@ -8,11 +8,13 @@ import { syncInboxFromEnv } from "@opencorp/stalwart";
 import {
   DEPARTMENT_KEYS,
   fallbackDepartment,
+  fallbackPlan,
   llmConfigFromEnv,
   planDepartment,
   planHeartbeat,
   tierShiftForLevel,
   tracerFromEnv,
+  type CeoPlan,
   type DepartmentReport,
 } from "@opencorp/llm";
 import {
@@ -401,13 +403,25 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
   );
 
   const traceId = `ceo-${companyId}-${day}`;
-  const plan = await planHeartbeat(
-    cfg,
-    system,
-    ctx,
-    tracer ? { tracer, traceId, name: "heartbeat-plan" } : undefined,
-    reports,
-  );
+  // Same contract as the department planners above: a model failure degrades to
+  // the deterministic plan instead of killing the heartbeat. Without this an
+  // unparseable reply lost the entire day — prod queued no work at all on
+  // 2026-07-19, 07-21 (partial) and 07-22. The reason lands on the ledger event
+  // so a persistently failing model can't hide behind a plausible-looking plan.
+  let planDegraded: string | null = null;
+  let plan: CeoPlan;
+  try {
+    plan = await planHeartbeat(
+      cfg,
+      system,
+      ctx,
+      tracer ? { tracer, traceId, name: "heartbeat-plan" } : undefined,
+      reports,
+    );
+  } catch (err) {
+    planDegraded = err instanceof Error ? err.message : String(err);
+    plan = fallbackPlan(ctx, reports);
+  }
   await tracer?.flush();
 
   // Don't queue new tasks the wallet can't fund a single task's estimate of —
@@ -429,7 +443,7 @@ export async function runCeoPlanning(companyId: string): Promise<{ userBrief: st
       promptHash: hash,
       // Present only when the CEO model failed and the deterministic planner
       // stood in — surfaced so a silently-degrading model is auditable.
-      ...(plan.degraded ? { degraded: true } : {}),
+      ...(planDegraded ? { degradedToFallback: planDegraded } : {}),
       departments: Object.fromEntries(
         reports.map((r) => [r.department, { headline: r.headline, proposed: r.proposed_tasks.length }]),
       ),

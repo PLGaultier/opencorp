@@ -116,22 +116,14 @@ const departmentsBlock = (reports: DepartmentReport[]): string =>
     )
     .join("\n\n");
 
-/**
- * `degraded` marks a plan the LLM did not actually produce (no endpoint, or it
- * failed schema repair twice). The heartbeat still ships work, but the flag
- * reaches the `ceo_plan` ledger event so a model that has silently started
- * failing every day is visible instead of looking like business as usual.
- */
-export type PlanResult = CeoPlan & { degraded?: boolean };
-
 export async function planHeartbeat(
   cfg: LlmConfig | null,
   systemPrompt: string,
   ctx: CeoContext,
   trace?: ChatOptions["trace"],
   departmentReports: DepartmentReport[] = [],
-): Promise<PlanResult> {
-  if (!cfg) return { ...fallbackPlan(ctx, departmentReports), degraded: true };
+): Promise<CeoPlan> {
+  if (!cfg) return fallbackPlan(ctx, departmentReports);
   const user =
     `Today's heartbeat context:\n\n${contextBlock(ctx)}\n\n` +
     (departmentReports.length
@@ -157,10 +149,10 @@ export async function planHeartbeat(
   for (let attempt = 0; ; attempt++) {
     const parsed = CeoPlan.safeParse(tryJson(raw));
     if (parsed.success) return parsed.data;
-    // Out of repair attempts: degrade to the deterministic plan rather than
-    // throw. A mediocre plan still dispatches work; an exception loses the day
-    // (prod, 2026-07-21: GLM returned null twice and the heartbeat died).
-    if (attempt >= 1) return { ...fallbackPlan(ctx, departmentReports), degraded: true };
+    // Throws by design, mirroring planDepartment: runCeoPlanning substitutes
+    // fallbackPlan and records the reason on the ceo_plan ledger event, so a
+    // model that has started failing every day stays visible.
+    if (attempt >= 1) throw new Error(`ceo plan failed validation: ${parsed.error.message}`);
     // schema-repair retry (§5.4) — never below the tier that just failed (OPE-7).
     const repair = routeTier({ taskKind: "schema_repair_retry", baseTier: route.tier });
     raw = await withLlmRetry(() =>

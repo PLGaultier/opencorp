@@ -101,9 +101,11 @@ export async function planDepartment(
   for (let attempt = 0; ; attempt++) {
     const parsed = DepartmentProposal.safeParse(tryJson(raw));
     if (parsed.success) return { department: dept, ...parsed.data };
-    // One department must not sink the heartbeat: fall back to its deterministic
-    // proposal so the CEO still gets a full set of inputs to synthesise from.
-    if (attempt >= 1) return fallbackDepartment(dept, ctx);
+    // Throws on purpose: runCeoPlanning already catches this, substitutes
+    // fallbackDepartment, and records `degradedToFallback` (with the reason) on
+    // the department_plan ledger event. Swallowing it here would silently lose
+    // that signal — a failing department would look like a healthy one.
+    if (attempt >= 1) throw new Error(`${dept} proposal failed validation: ${parsed.error.message}`);
     // schema-repair retry (§5.4) — never below the tier that just failed (OPE-7).
     const repair = routeTier({ taskKind: "schema_repair_retry", baseTier: route.tier });
     raw = await withLlmRetry(() =>
