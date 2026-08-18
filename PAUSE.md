@@ -68,39 +68,37 @@ Intégrité vérifiée : md5 identiques VPS ↔ local, archives gzip testées.
 
 ---
 
-## 3. Extinction — à faire
+## 3. Extinction
 
-### 3.1 Arrêter la stack (stoppe la dépense LLM quotidienne)
+### 3.1 Arrêter la stack — FAIT ✅ (2026-08-18)
 
 ```sh
-ssh opencorp-vps
-cd /opt/opencorp
 docker compose -f infra/compose/docker-compose.prod.yml --env-file .env.prod down
 ```
 
-Ne fais **pas** `down -v` : `-v` détruirait les volumes. La sauvegarde est déjà
-prise, mais autant garder la machine intacte tant qu'elle vit.
+Les 9 conteneurs sont arrêtés et supprimés ; les 5 volumes sont **intacts**
+(`down` sans `-v`). `api`/`gw`/`*.opencorp.app` ne répondent plus. La dépense
+LLM quotidienne est stoppée.
 
-### 3.2 Nettoyer le DNS (important)
+### 3.2 Nettoyer le DNS — FAIT ✅ (2026-08-18)
 
-Ces enregistrements pointent vers le VPS. Quand l'hébergeur réattribuera l'IP
-`89.116.110.150` à quelqu'un d'autre, ce tiers pourra servir ce qu'il veut sur
-tes sous-domaines (et Caddy on-demand TLS leur délivrerait un certificat) —
-c'est un risque de *subdomain takeover*. **À supprimer chez le registrar :**
+Le domaine est enregistré **chez Vercel** (nameservers Vercel, expire le
+**11 juin 2027**), donc le DNS se pilote en CLI : `vercel dns ls|rm`.
 
-| Type | Nom | Valeur actuelle |
-|---|---|---|
-| A | `api` | 89.116.110.150 |
-| A | `gw` | 89.116.110.150 |
-| A | `llm` | 89.116.110.150 |
-| A | `app` | 89.116.110.150 |
-| A | `*` (wildcard) | 89.116.110.150 |
-| MX | `@` | `10 mail.opencorp.app` |
+Six enregistrements pointaient vers `89.116.110.150` et ont été supprimés —
+`*` (wildcard), `api`, `gw`, `llm`, `mail` (A) et `mail` (MX). Sans ça, le jour
+où l'hébergeur réattribue cette IP, le nouveau locataire aurait pu servir ce
+qu'il voulait sur `*.opencorp.app`, avec un certificat valide via Caddy
+on-demand TLS (*subdomain takeover*).
 
-**À conserver :** l'apex `opencorp.app` → Vercel (`64.29.17.65`,
-`216.198.79.1`), qui sert la vitrine.
+Vérifié auprès de 1.1.1.1 et 8.8.8.8 : plus aucun nom ne résout vers l'ancienne
+IP. Le wildcard retombe sur l'ALIAS Vercel par défaut.
 
-### 3.3 Révoquer les clés API
+**Conservés** (aucune référence au VPS, utiles à la reprise) : les
+enregistrements Resend `send.mail` (SPF + MX), `resend._domainkey.mail` (DKIM)
+et `_dmarc.mail`.
+
+### 3.3 Révoquer les clés API — À FAIRE (manuel)
 
 Le disque du VPS part au recyclage avec `.env.prod` dessus. À révoquer dans
 chaque console (accès manuel requis) :
@@ -116,6 +114,31 @@ chaque console (accès manuel requis) :
       `LITELLM_API_KEY`, `POSTGRES_PASSWORD`, `STALWART_*`
 
 À la reprise : régénérer tout ça (`openssl rand -hex 32` pour les secrets internes).
+
+### 3.4 Vitrine « en pause » — DÉPLOYÉE ✅ / bascule du domaine À FAIRE
+
+Le dashboard Next.js dépend de l'API pour chaque page : sans backend, il rend
+des erreurs 500. Il a donc été remplacé par un site **statique** autonome.
+
+- Sources : `~/Documents/OpenCorp-archive-2026-08-18/paused-site/`
+- Projet Vercel : **`opencorp-paused`** (séparé de `opencorp` exprès — sinon la
+  fusion d'une PR sur `master` relancerait le build Next.js et écraserait la
+  page de pause)
+- En ligne : <https://opencorp-paused.vercel.app>
+- Contenu : landing « projet en pause » + ledger figé navigable (4353
+  événements, filtres) + export JSON complet téléchargeable
+
+**Reste à faire — bascule du domaine (dashboard Vercel, ~30 s) :**
+
+1. Projet `opencorp` → Settings → Domains → retirer `opencorp.app`
+2. Projet `opencorp-paused` → Settings → Domains → ajouter `opencorp.app`
+
+> ⚠️ À faire dans le dashboard, **pas** avec `vercel domains rm` : cette
+> commande retire la *propriété du domaine sur le compte*, et le domaine est
+> enregistré chez Vercel. La CLI ne sait pas détacher un domaine d'un projet.
+
+Tant que la bascule n'est pas faite, `opencorp.app` sert l'ancien dashboard qui
+répond 200 mais affiche des erreurs 500 partout.
 
 ---
 
@@ -136,7 +159,8 @@ chaque console (accès manuel requis) :
    chaîne qu'au §1 si rien n'a été perdu.
 7. Les entreprises reprennent leurs heartbeats via leurs Temporal Schedules.
    `POST /admin/schedules/backfill` si les schedules n'ont pas été recréés.
-8. Le reste de la procédure d'installation est dans [DEPLOY.md](./DEPLOY.md).
+8. Rebasculer `opencorp.app` du projet `opencorp-paused` vers `opencorp`.
+9. Le reste de la procédure d'installation est dans [DEPLOY.md](./DEPLOY.md).
 
 ---
 
