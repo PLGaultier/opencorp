@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenCorp — frozen ledger</title>
+<style>
+  :root{--bg:#f4ecd8;--ink:#2b2419;--muted:#7a6a53;--line:#d8c9a8;--card:#fffaf0;--accent:#b4531f}
+  @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+    --bg:#17150f;--ink:#e8ddc6;--muted:#9c8d74;--line:#332d22;--card:#201d16;--accent:#e0844a}}
+  :root[data-theme=dark]{--bg:#17150f;--ink:#e8ddc6;--muted:#9c8d74;--line:#332d22;--card:#201d16;--accent:#e0844a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 ui-monospace,"SF Mono",Menlo,Consolas,monospace;padding:1.5rem 1rem 4rem}
+  .wrap{max-width:62rem;margin:0 auto}
+  a{color:var(--accent)}
+  h1{font-size:1.3rem;margin:0 0 .2rem}
+  .bar{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin:1.2rem 0}
+  input,select{font:inherit;background:var(--card);color:var(--ink);
+    border:2px solid var(--line);padding:.35rem .5rem}
+  input{flex:1;min-width:12rem}
+  .scroll{overflow-x:auto;border:2px solid var(--line);background:var(--card)}
+  table{width:100%;border-collapse:collapse;font-size:.82rem;min-width:46rem}
+  th,td{text-align:left;padding:.3rem .55rem;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{position:sticky;top:0;background:var(--card);color:var(--muted);
+    font-weight:400;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase}
+  td.n{text-align:right;font-variant-numeric:tabular-nums}
+  .muted{color:var(--muted)}
+  .more{display:block;width:100%;margin-top:1rem;font:inherit;padding:.6rem;
+    background:none;border:2px solid var(--ink);color:var(--ink);cursor:pointer}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Frozen ledger</h1>
+  <p class="muted" style="margin:0 0 0 0"><a href="./">← back</a> ·
+    4353 events · chain verified at shutdown ·
+    <a href="./ledger-full.json">full export with payloads (JSON)</a></p>
+
+  <div class="bar">
+    <input id="q" placeholder="filter by company, actor, event type, seq…">
+    <select id="type"><option value="">all event types</option></select>
+    <span class="muted" id="count"></span>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th class="n">Seq</th><th>When (UTC)</th><th>Company</th>
+        <th>Actor</th><th>Event</th><th>Hash</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <button class="more" id="more" hidden>Show more</button>
+</div>
+<script>
+let all=[], view=[], shown=0; const PAGE=200;
+const $=id=>document.getElementById(id);
+
+fetch("./ledger-index.json").then(r=>r.json()).then(d=>{
+  all=d;
+  [...new Set(d.map(e=>e.t))].sort().forEach(t=>
+    $("type").insertAdjacentHTML("beforeend",`<option>${t}</option>`));
+  apply();
+});
+
+function apply(){
+  const q=$("q").value.trim().toLowerCase(), t=$("type").value;
+  view=all.filter(e=>(!t||e.t===t)&&(!q||
+    (e.c+" "+e.a+" "+e.t+" "+e.s).toLowerCase().includes(q)));
+  $("rows").innerHTML=""; shown=0;
+  $("count").textContent=view.length===all.length
+    ? `${all.length} events` : `${view.length} of ${all.length}`;
+  render();
+}
+function render(){
+  const next=view.slice(shown,shown+PAGE);
+  $("rows").insertAdjacentHTML("beforeend", next.map(e=>
+    `<tr><td class="n">${e.s}</td><td class="muted">${e.d}</td><td>${e.c}</td>`+
+    `<td>${e.a}</td><td>${e.t}</td><td class="muted">${e.h}…</td></tr>`).join(""));
+  shown+=next.length;
+  $("more").hidden = shown>=view.length;
+}
+$("q").oninput=apply; $("type").onchange=apply; $("more").onclick=render;
+</script>
+</body>
+</html>
