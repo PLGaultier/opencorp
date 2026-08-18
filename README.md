@@ -1,68 +1,87 @@
 # OpenCorp
 
-Self-hostable platform for autonomous AI-run companies with **radical
-transparency**: every agent decision, tool call, token spent, and cent earned
-lands on a public, hash-chained ledger.
+**Self-hostable platform for autonomous, AI-run companies.**
 
-> **Status:** source published for evaluation and self-hosting while the
-> licensing model is being decided — see [License](#license) below.
+Write one prompt (*"a tiny SaaS that summarizes PDFs"*) and OpenCorp spins up a
+company: a mission, a CEO agent that plans, worker agents that write code, ship a
+website, send email, and take payments — all running on a daily schedule with no
+human in the loop.
 
-Full spec: [OPENCORP_SPEC.md](./OPENCORP_SPEC.md). Current milestone: **M5 — Frontier (in progress)**:
-- **Multi-agent departments** — every heartbeat, CMO/CTO/CFO sub-planners (`prompts/dept_*.md`) review the company through their own lens and publish `department_plan` proposals to the ledger; the CEO synthesizes them into the final plan.
-- **Autonomous heartbeats** — every company gets a per-company Temporal Schedule (daily cron, `HEARTBEAT_CRON`) created at provisioning; pause/resume are owner-only API controls (`POST /companies/:id/pause|resume`), and `POST /admin/schedules/backfill` migrates pre-existing companies. Companies now run with zero human involvement — the §16 "daily autonomous task runs" requirement.
-- **Auth** — Better Auth (email + password, §3) mounted at `/api/auth/*`; signing up creates the user's conglomerate with an owner membership. Owner/money endpoints (create company, heartbeat, pause/resume, chat, run task, withdraw, subscribe) require a session + conglomerate membership; transparency surfaces (`/api/companies`, `/api/ledger*`, `/api/live`) stay public by design (§9.2). Dashboard gets `/login` + a session badge. Dev: `OPENCORP_AUTH_DISABLED=1` bypasses auth for demo scripts.
+Every move is **radically transparent**: each agent decision, tool call, token
+spent, and cent earned lands on a public, hash-chained ledger you can verify
+independently.
+
+> **Status:** paused since 2026-08-18 — the production instance has been shut
+> down and the hosting retired. The frozen ledger (4353 verified events) and the
+> full shutdown/resume runbook are in [PAUSE.md](./PAUSE.md). Source is published
+> for evaluation and self-hosting — see [License](#license).
+
+Full technical spec: [OPENCORP_SPEC.md](./OPENCORP_SPEC.md).
+
+## How it works
+
+- **One-prompt companies** — `POST /companies` provisions a mission, CEO, DB,
+  site, and email via a Temporal workflow.
+- **CEO + departments** — every heartbeat, CMO/CTO/CFO sub-planners review the
+  company through their own lens; the CEO synthesizes their proposals into a plan.
+- **Autonomous worker tasks** — the CEO delegates tasks to workers that run in
+  isolated sandboxes, one at a time per company, under daily and spend caps.
+- **Daily heartbeats** — each company runs on its own cron schedule; owners can
+  pause/resume but the company otherwise runs itself.
+- **Verifiable ledger** — `hash = SHA-256(prev_hash ‖ canonical_json(payload) ‖ seq ‖ created_at)`,
+  secrets redacted first. `bun run ledger:verify` recomputes the chain.
 
 ## Layout
 
 ```
-apps/api            Bun + Hono REST API (/api/ledger, /api/ledger/verify)
-services/ledgerd    Append-only hash-chained ledger + redaction + verify CLI
-packages/schema     Drizzle schema for the control DB (Postgres 17 + pgvector)
-infra/compose       Local dev stack (PG, Valkey, Temporal, MinIO, LiteLLM)
-prompts/            Versioned agent prompts
+apps/api          Bun + Hono REST API + auth (Better Auth)
+apps/web          Dashboard (deployed on Vercel)
+apps/gateway      LLM gateway (spend limits, prompt-injection containment)
+services/agentd   Agent runtime — CEO planning + worker task execution
+services/ledgerd  Append-only hash-chained ledger + verify CLI
+services/deployd  Per-company website deploys
+services/sandboxd Sandboxed code execution (local pool or E2B microVMs)
+packages/schema   Drizzle schema (Postgres 17 + pgvector)
+prompts/          Versioned agent prompts (CEO, dept_*, design)
+infra/compose     Local + prod Docker stacks (PG, Valkey, Temporal, LiteLLM)
 ```
 
-## Try it locally (4 commands)
+## Try it locally
 
 Everything runs on **your own machine** — your Anthropic key, your Docker, your
-data. Nothing is shared or hosted; there are no accounts to create.
+data. No accounts to create.
 
 **Prerequisites:** [Bun](https://bun.sh) and Docker Desktop (running).
 
 ```bash
 git clone https://github.com/PLGaultier/opencorp.git && cd opencorp
 bun install
-cp .env.example .env       # optional: add your own ANTHROPIC_API_KEY (see below)
+cp .env.example .env       # optional: add your own ANTHROPIC_API_KEY
 bun run dev                # brings up Postgres + Temporal, migrates, launches everything
 ```
 
-When it's ready, open:
-
-- **Dashboard** → http://localhost:3000
-- **API** → http://localhost:3001
-- **Temporal UI** → http://localhost:8233
-
-Spin up your first autonomous company:
+Then open the **Dashboard** at http://localhost:3000 (API on `:3001`, Temporal UI
+on `:8233`) and create your first company:
 
 ```bash
 curl -XPOST localhost:3001/companies -H 'content-type: application/json' \
   -d '{"prompt":"a tiny SaaS that summarizes PDFs"}'
 ```
 
-**About the key:** with an `ANTHROPIC_API_KEY` in `.env`, agents think with a
+**No key needed to look around.** With an `ANTHROPIC_API_KEY`, agents think with a
 real model (billed to *your* key). Leave it blank and the whole stack still runs
-end-to-end in a deterministic offline mode — perfect for a first look. Every other
-integration in `.env.example` (GitHub auth, email, payments, ads, cloud sandboxes)
-is off by default and degrades to a local mock, so no other accounts are needed.
+end-to-end in a deterministic offline mode. Every other integration (GitHub auth,
+email, payments, ads, cloud sandboxes) is off by default and falls back to a local
+mock.
 
 ## Developing
 
 ```bash
-bun test              # full suite, incl. the M0 exit test: 10k events, chain verifies
+bun test              # full suite, incl. the ledger chain-verify test (10k events)
 bun run ledger:verify # recompute the ledger hash-chain against Postgres
 ```
 
-## Self-host on your own server
+## Self-host on a server
 
 To run a real, reachable instance (single VPS + Docker Compose + Caddy, dashboard
 on Vercel, real GitHub auth + LLM), see **[DEPLOY.md](./DEPLOY.md)** for the full
@@ -73,27 +92,12 @@ cp .env.prod.example .env.prod    # set your domain, secrets, ANTHROPIC_API_KEY,
 docker compose -f infra/compose/docker-compose.prod.yml --env-file .env.prod up -d --build
 ```
 
-The sandbox starts in `local` mode (agent code runs inside the worker container —
-fine for your own companies). Flip `SANDBOX_KIND=e2b` for real microVM isolation
-before exposing it to untrusted use.
-
-## Ledger design (§9 of the spec)
-
-Each event: `hash = SHA-256(prev_hash ‖ canonical_json(payload) ‖ seq ‖ created_at)`.
-Payloads pass a versioned redactor first (secrets stripped, third-party emails
-hashed). `bun run ledger:verify` recomputes the chain and reports the first
-broken seq, if any.
-
-## Threat model & honest limits
-
-See §15 of the spec: prompt injection containment at the gateway, outbound
-email throttles, no claim of legal entity creation, payments stay a pluggable
-adapter (Stripe Connect default).
+The sandbox starts in `local` mode (agent code runs in the worker container). Flip
+`SANDBOX_KIND=e2b` for real microVM isolation before exposing it to untrusted use.
 
 ## License
 
-**Not yet licensed — all rights reserved.** The source is published so you can
-read it, run it locally, and self-host it for **evaluation and personal use**.
-It is **not** open source under the OSI definition (yet): a permissive, copyleft,
-or source-available license may follow once the model is decided. For commercial
-or production use, please ask first.
+**Not yet licensed — all rights reserved.** The source is published so you can read
+it, run it locally, and self-host it for **evaluation and personal use**. It is
+**not** open source under the OSI definition (yet). For commercial or production
+use, please ask first.
